@@ -3,7 +3,7 @@
 // orientation survive the handover, and a 512^2 x N stack renders at interactive cost.
 // Usage: vtk_probe <dicom-folder> [--shot out.png] [--size 900]
 
-#include "hw/series_index.h"
+#include "hw/index_store.h"
 #include "hw/volume.h"
 
 #include <vtkCamera.h>
@@ -52,7 +52,7 @@ int main(int argc, char** argv)
         return 1;
     }
     const auto t1 = std::chrono::steady_clock::now();
-    std::printf("volume %dx%dx%d spacing %.2f/%.2f/%.2f mm, %zu MB, load %.0f ms\n",
+    std::printf("volume %dx%dx%d spacing %.2f/%.2f/%.2f mm, %.0f MB, load %.0f ms\n",
                 vol.width, vol.height, vol.depth, vol.spacingX, vol.spacingY, vol.spacingZ,
                 double(vol.voxels.size() * sizeof(float)) / (1024.0 * 1024.0),
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
