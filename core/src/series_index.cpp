@@ -166,8 +166,19 @@ bool loadFrame(const std::string& file, ImageFrame& out)
         }
     }
 
+    // PhotometricInterpretation decides which way round the grey ramp runs. MONOCHROME1 means high
+    // stored values are displayed dark — the flip belongs at presentation, so it is recorded on the
+    // frame and applied by render(), leaving the stored values (and the window numbers) untouched.
+    bool invert = false;
+    {
+        OFString pi;
+        if (ds->findAndGetOFStringArray(DCM_PhotometricInterpretation, pi).good())
+            invert = (pi == "MONOCHROME1");
+    }
+
     out = makeFrame(std::move(raw), int(img.getWidth()), int(img.getHeight()),
                     slope, intercept, hasPadding, paddingValue);
+    out.invert = invert;
     return out.valid();
 }
 

@@ -9,6 +9,7 @@ add_library(clivus_core STATIC
     src/series_index.cpp
 )
 target_include_directories(clivus_core PUBLIC include)
+target_link_libraries(clivus_core PUBLIC clivus_version)
 if(TARGET DCMTK::DCMTK)
     target_link_libraries(clivus_core PUBLIC DCMTK::DCMTK)
 else()
@@ -38,9 +39,15 @@ add_executable(clivus_test_index_store tests/test_index_store.cpp)
 target_link_libraries(clivus_test_index_store PRIVATE clivus_core)
 add_test(NAME index_store COMMAND clivus_test_index_store)
 
+# Writes its own two objects (MONOCHROME1 and MONOCHROME2 over the same pixels), so no corpus needed.
+add_executable(clivus_test_photometric tests/test_photometric.cpp)
+target_link_libraries(clivus_test_photometric PRIVATE clivus_core)
+add_test(NAME photometric COMMAND clivus_test_photometric)
+
 # The tests are assert-based, and Release would define NDEBUG and silently erase every check while
 # still printing "all checks passed". Strip it for test targets only.
-foreach(test_target clivus_test_image_frame clivus_test_decode clivus_test_volume clivus_test_index_store)
+foreach(test_target clivus_test_image_frame clivus_test_decode clivus_test_volume clivus_test_index_store
+                     clivus_test_photometric)
     if(MSVC)
         target_compile_options(${test_target} PRIVATE /UNDEBUG)
     else()

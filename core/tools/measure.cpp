@@ -29,6 +29,12 @@ int main(int argc, char** argv)
 
     int failures = 0;
     for (const auto& s : series) {
+        // A cached series row with no files (the index is a LEFT JOIN) has nothing to decode;
+        // s.files.front() on it would be undefined behaviour.
+        if (s.files.empty()) {
+            std::printf("SKIP %s: series has no files in the index\n", s.seriesUid.c_str());
+            continue;
+        }
         clivus::ImageFrame frame;
         const auto d0 = std::chrono::steady_clock::now();
         if (!clivus::loadFrame(s.files.front(), frame)) {
