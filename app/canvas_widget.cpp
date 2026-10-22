@@ -1,5 +1,6 @@
 #include "canvas_widget.h"
 
+#include <QDebug>
 #include <QMouseEvent>
 #include <QWheelEvent>
 
@@ -16,6 +17,11 @@ CanvasWidget::CanvasWidget(QWidget* parent)
 void CanvasWidget::initializeGL()
 {
     initializeOpenGLFunctions();
+    // Which GL implementation we actually got decides whether a Windows benchmark means anything:
+    // a real driver names NVIDIA/AMD/Intel, a fallback names GDI Generic or llvmpipe.
+    qInfo("GL %s | %s | %s", reinterpret_cast<const char*>(glGetString(GL_VERSION)),
+          reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
+          reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
     glGenTextures(1, &m_tex);
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

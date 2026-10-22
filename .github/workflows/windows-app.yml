@@ -1,0 +1,41 @@
+name: windows-app
+
+# Manual only. Compiles the Qt GUI with MSVC so MSVC-only breakage (Qt/DCMTK/Windows headers) shows up
+# without a Windows machine. A hosted runner has no GPU, so this says nothing about fps — that needs a
+# real desktop, see docs/windows.md.
+on:
+  workflow_dispatch:
+
+jobs:
+  app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.1'
+          cache: true
+
+      - name: Enable vcpkg manifest mode
+        shell: pwsh
+        run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Cache vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
+          key: vcpkg-app-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure

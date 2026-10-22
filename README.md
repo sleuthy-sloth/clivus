@@ -33,7 +33,8 @@ build/mac/app/horoswin testdata/synthetic512 --bench 150   # fps at 512²
 PixelPaddingValue, so the loader is testable without patient data; `testdata/corpus/` also holds
 two small pydicom sample objects (CT_small, MR_small) for a real-world sanity check.
 
-Windows (MSVC + vcpkg; needs `VCPKG_ROOT` set):
+Windows (MSVC + vcpkg; needs `VCPKG_ROOT` set) — full runbook with pass criteria in
+[`docs/windows.md`](docs/windows.md):
 
 ```powershell
 cmake --preset win
@@ -41,8 +42,10 @@ cmake --build --preset win
 ctest --preset win
 ```
 
-CI builds and tests **core only** on `windows-latest` (`.github/workflows/windows.yml`);
-`vcpkg install dcmtk` from source is slow the first time and Qt is deliberately not installed there.
+CI builds and tests **core only** on `windows-latest` (`.github/workflows/windows.yml`); Qt is not
+installed there because that job is about pixels and codecs, not widgets. `.github/workflows/windows-app.yml`
+is manual-only and compiles the GUI with MSVC. Neither can measure fps: that needs a real GPU, and
+`docs/windows.md` is the runbook for the machine that has one.
 
 ## Codecs — what actually decodes
 
