@@ -15,7 +15,9 @@
       "name": "mac-core",
       "inherits": "mac",
       "binaryDir": "${sourceDir}/build/mac-core",
-      "cacheVariables": { "HW_BUILD_APP": "OFF" }
+      "cacheVariables": {
+        "HW_BUILD_APP": "OFF"
+      }
     },
     {
       "name": "win",
@@ -26,15 +28,55 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
+    },
+    {
+      "name": "mac-vtk",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mac-vtk",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_PREFIX_PATH": "/opt/homebrew/opt/qt",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+        "HW_BUILD_VTK_PROBE": "ON"
+      },
+      "displayName": "macOS + VTK probe"
     }
   ],
   "buildPresets": [
-    { "name": "mac", "configurePreset": "mac" },
-    { "name": "mac-core", "configurePreset": "mac-core" },
-    { "name": "win", "configurePreset": "win", "configuration": "Release" }
+    {
+      "name": "mac",
+      "configurePreset": "mac"
+    },
+    {
+      "name": "mac-core",
+      "configurePreset": "mac-core"
+    },
+    {
+      "name": "win",
+      "configurePreset": "win",
+      "configuration": "Release"
+    },
+    {
+      "name": "mac-vtk",
+      "configurePreset": "mac-vtk",
+      "displayName": "macOS + VTK probe"
+    }
   ],
   "testPresets": [
-    { "name": "mac-core", "configurePreset": "mac-core", "output": { "outputOnFailure": true } },
-    { "name": "win", "configurePreset": "win", "configuration": "Release", "output": { "outputOnFailure": true } }
+    {
+      "name": "mac-core",
+      "configurePreset": "mac-core",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "win",
+      "configurePreset": "win",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
   ]
 }
