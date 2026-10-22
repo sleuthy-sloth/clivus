@@ -4,6 +4,7 @@
 #include "hw/codecs.h"
 #include "hw/index_store.h"
 #include "hw/series_index.h"
+#include "hw/volume.h"
 
 #include <chrono>
 #include <cstdio>
@@ -55,6 +56,26 @@ int main(int argc, char** argv)
                     double(frame.minValue), double(frame.maxValue), center, width,
                     s.seriesDescription.c_str());
     }
+    // Stack cost: what MPR and volume rendering pay once, up front.
+    for (const auto& s : series) {
+        if (s.files.size() < 2) continue;
+        hw::Volume vol;
+        const auto v0 = std::chrono::steady_clock::now();
+        const bool ok = hw::loadVolume(s, vol);
+        const auto v1 = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(v1 - v0).count();
+        if (!ok) {
+            std::printf("stack %s: FAILED\n", s.seriesUid.c_str());
+            ++failures;
+            continue;
+        }
+        std::printf("stack %dx%dx%d  spacing %.2f/%.2f/%.2f mm  %zu slices in %6.1f ms (%.1f ms/slice)  "
+                    "range [%.0f, %.0f]  %.0f MB\n",
+                    vol.width, vol.height, vol.depth, vol.spacingX, vol.spacingY, vol.spacingZ,
+                    size_t(vol.depth), ms, ms / vol.depth, double(vol.minValue), double(vol.maxValue),
+                    double(vol.voxels.size() * sizeof(float)) / (1024.0 * 1024.0));
+    }
+
     std::printf("%s\n", failures == 0 ? "all series decoded" : "DECODE FAILURES");
     return failures == 0 ? 0 : 1;
 }

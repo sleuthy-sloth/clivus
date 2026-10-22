@@ -3,7 +3,11 @@
 
 No DICOM library needed: enough of the standard to exercise series scanning, the
 modality transform (slope/intercept), PixelPaddingValue and 16-bit decoding.
-Usage: python3 make_synthetic.py <outdir>
+Usage: python3 make_synthetic.py <outdir> [size] [slices] [--zfill] [--reverse]
+
+--zfill    fill slice k with the constant k (slope 1, no padding). Gives the volume tests a value
+           that identifies which slice ended up at which depth.
+--reverse  write the files in descending z, so anything that trusts filename order gets it wrong.
 """
 import os
 import struct
@@ -57,19 +61,23 @@ def uid(root: str, n: int):
     return f"{root}.{n}"
 
 
-def make_slice(path, series_uid, study_uid, sop_uid, instance, z, size=512):
+def make_slice(path, series_uid, study_uid, sop_uid, instance, z, size=512, fill_value=None):
     px = bytearray()
     for y in range(size):
         for x in range(size):
+            if fill_value is not None:
+                px += struct.pack("<h", fill_value)
+                continue
             dx, dy = x - size // 2, y - size // 2
             r = (dx * dx + dy * dy) ** 0.5
             v = 900.0 - abs(r - 60 - instance * 8) * 4.0          # ring shrinking with z
             v += 200 + instance * 20                              # soft-tissue-ish background
             stored = max(-2000, min(2047, int(v)))
             px += struct.pack("<h", stored)
-    for i in range(0, len(px), 194):                             # every 97th pixel: padding value
+    if fill_value is None:
+        for i in range(0, len(px), 194):                         # every 97th pixel: padding value
                                                                  # (even stride: never split a pixel)
-        px[i:i + 2] = struct.pack("<h", -2000)
+            px[i:i + 2] = struct.pack("<h", -2000)
 
     items = [
         txt((0x0008, 0x0016), "UI", CT_IMAGE_STORAGE),
@@ -84,6 +92,9 @@ def make_slice(path, series_uid, study_uid, sop_uid, instance, z, size=512):
         is_((0x0020, 0x0011), 1),
         is_((0x0020, 0x0013), instance),
         txt((0x0020, 0x0032), "DS", f"0\\0\\{z}"),
+        txt((0x0020, 0x0037), "DS", "1\\0\\0\\0\\1\\0"),      # axial: normal is +z
+        ds((0x0018, 0x0050), "2.5"),
+        ds((0x0018, 0x0088), "2.5"),
         us((0x0028, 0x0002), 1),
         txt((0x0028, 0x0004), "CS", "MONOCHROME2"),
         us((0x0028, 0x0010), size),
@@ -95,11 +106,12 @@ def make_slice(path, series_uid, study_uid, sop_uid, instance, z, size=512):
         us((0x0028, 0x0103), 1),                                  # signed
         ds((0x0028, 0x1050), "40"),
         ds((0x0028, 0x1051), "400"),
-        ds((0x0028, 0x1052), "-1024"),
+        ds((0x0028, 0x1052), "0" if fill_value is not None else "-1024"),
         ds((0x0028, 0x1053), "1"),
-        ss((0x0028, 0x0120), -2000),
-        elem((0x7FE0, 0x0010), "OW", bytes(px)),
     ]
+    if fill_value is None:
+        items.append(ss((0x0028, 0x0120), -2000))
+    items.append(elem((0x7FE0, 0x0010), "OW", bytes(px)))
     ds_body = b"".join(sorted(items, key=lambda b: struct.unpack("<HH", b[0:4])))   # ascending tag order
 
     meta_group_len = 0
@@ -116,16 +128,26 @@ def make_slice(path, series_uid, study_uid, sop_uid, instance, z, size=512):
 
 
 def main():
-    outdir = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
-    size = int(sys.argv[2]) if len(sys.argv) > 2 else 512
-    slices = int(sys.argv[3]) if len(sys.argv) > 3 else 8
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    outdir = os.path.abspath(args[0] if len(args) > 0 else ".")
+    size = int(args[1]) if len(args) > 1 else 512
+    slices = int(args[2]) if len(args) > 2 else 8
+    zfill = "--zfill" in flags
+    reverse = "--reverse" in flags
     os.makedirs(outdir, exist_ok=True)
     root = "1.2.826.0.1.3680043.8.1055.1"
     series_uid = uid(root, 100)
     study_uid = uid(root, 101)
-    for i in range(slices):
-        make_slice(os.path.join(outdir, f"syn-{i:02d}.dcm"), series_uid, study_uid,
-                   uid(root, 200 + i), i + 1, z=i * 2.5, size=size)
+    order = list(range(slices))
+    if reverse:
+        order.reverse()
+    for pos, i in enumerate(order):
+        # filename advances with write order, z with slice index: with --reverse the two disagree.
+        # --reverse deliberately makes InstanceNumber disagree with position, so a test can tell which
+        # of the two the loader believed.
+        make_slice(os.path.join(outdir, f"syn-{pos:02d}.dcm"), series_uid, study_uid,
+                   uid(root, 200 + i), pos + 1 if reverse else i + 1, z=i * 2.5, size=size, fill_value=i if zfill else None)
     print(f"wrote {slices} slices ({size}x{size}) to {outdir}")
 
 
