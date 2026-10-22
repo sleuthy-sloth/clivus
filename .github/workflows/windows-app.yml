@@ -26,6 +26,10 @@ jobs:
         with:
           path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
           key: vcpkg-app-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          # Reuse the core job's archives: dcmtk is built from source (~19 min) on a cold cache.
+          restore-keys: |
+            vcpkg-app-${{ runner.os }}-
+            vcpkg-${{ runner.os }}-
 
       - uses: ilammy/msvc-dev-cmd@v1
 
