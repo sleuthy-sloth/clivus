@@ -9,6 +9,7 @@ add_library(clivus_core STATIC
     src/series_index.cpp
 )
 target_include_directories(clivus_core PUBLIC include)
+target_link_libraries(clivus_core PUBLIC clivus_version)
 if(TARGET DCMTK::DCMTK)
     target_link_libraries(clivus_core PUBLIC DCMTK::DCMTK)
 else()

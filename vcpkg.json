@@ -1,6 +1,7 @@
 {
+  "$comment": "No version field on purpose: the version comes from project() in CMakeLists.txt. The baseline pins the port versions this manifest resolves against.",
   "name": "clivus",
-  "version-string": "0.1.0",
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [
     {
       "name": "dcmtk",

@@ -7,6 +7,8 @@
 #include <QCommandLineParser>
 #include <QSurfaceFormat>
 
+#include "clivus/version.h"
+
 #include "main_window.h"
 
 int main(int argc, char** argv)
@@ -31,7 +33,7 @@ int main(int argc, char** argv)
 
     QApplication app(argc, argv);
     QApplication::setApplicationName("Clivus");
-    QApplication::setApplicationVersion("0.1.0-spike");
+    QApplication::setApplicationVersion(CLIVUS_VERSION);
     QApplication::setOrganizationName("clivus");
 
     QCommandLineParser parser;
