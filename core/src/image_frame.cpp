@@ -48,7 +48,8 @@ void ImageFrame::render(uint8_t* out, double center, double width) const
         if (x <= first)      y = 0.0;
         else if (x > last)   y = 255.0;
         else                 y = (x - first) * scale;
-        out[i] = uint8_t(std::clamp(y, 0.0, 255.0) + 0.5);
+        const double shown = invert ? 255.0 - y : y;   // MONOCHROME1 after clamping
+        out[i] = uint8_t(std::clamp(shown, 0.0, 255.0) + 0.5);
     }
 }
 

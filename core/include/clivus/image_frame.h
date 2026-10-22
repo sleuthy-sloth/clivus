@@ -12,6 +12,9 @@ struct ImageFrame {
     std::vector<float> pixels;   // modality units, row-major, top-left origin
     float minValue = 0.0f;       // over non-padding pixels
     float maxValue = 0.0f;
+    // MONOCHROME1: the file says high stored values are displayed dark. The flip happens in
+    // render(), so pixels, min/max and the window numbers stay in modality units.
+    bool invert = false;
 
     bool valid() const { return width > 0 && height > 0 && pixels.size() == size_t(width) * size_t(height); }
 
