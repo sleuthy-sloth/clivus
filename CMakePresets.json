@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "mac",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mac",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_PREFIX_PATH": "/opt/homebrew/opt/qt",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
+      }
+    },
+    {
+      "name": "mac-core",
+      "inherits": "mac",
+      "binaryDir": "${sourceDir}/build/mac-core",
+      "cacheVariables": { "HW_BUILD_APP": "OFF" }
+    },
+    {
+      "name": "win",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/win",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mac", "configurePreset": "mac" },
+    { "name": "mac-core", "configurePreset": "mac-core" },
+    { "name": "win", "configurePreset": "win", "configuration": "Release" }
+  ],
+  "testPresets": [
+    { "name": "mac-core", "configurePreset": "mac-core", "output": { "outputOnFailure": true } },
+    { "name": "win", "configurePreset": "win", "configuration": "Release", "output": { "outputOnFailure": true } }
+  ]
+}
