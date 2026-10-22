@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Headless smoke test + frame-cost measurement: scan a folder, decode, window, report timings.
 // The GUI adds GL texture upload + draw on top of this; this isolates the CPU cost the
 // canvas pays on every window/level change.
-#include "hw/codecs.h"
-#include "hw/index_store.h"
-#include "hw/series_index.h"
-#include "hw/volume.h"
+#include "clivus/codecs.h"
+#include "clivus/index_store.h"
+#include "clivus/series_index.h"
+#include "clivus/volume.h"
 
 #include <chrono>
 #include <cstdio>
@@ -14,13 +15,13 @@
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        std::printf("usage: hw_measure <dicom-folder> [iterations]\n");
+        std::printf("usage: clivus_measure <dicom-folder> [iterations]\n");
         return 2;
     }
     const int iterations = argc > 2 ? std::atoi(argv[2]) : 100;
-    std::printf("decoders: %s\n", hw::codecSummary().c_str());
+    std::printf("decoders: %s\n", clivus::codecSummary().c_str());
     const auto t0 = std::chrono::steady_clock::now();
-    const auto series = hw::scanDirectoryCached(argv[1]);
+    const auto series = clivus::scanDirectoryCached(argv[1]);
     const auto t1 = std::chrono::steady_clock::now();
     std::printf("scan: %zu series, %5.1f ms\n", series.size(),
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
@@ -28,9 +29,9 @@ int main(int argc, char** argv)
 
     int failures = 0;
     for (const auto& s : series) {
-        hw::ImageFrame frame;
+        clivus::ImageFrame frame;
         const auto d0 = std::chrono::steady_clock::now();
-        if (!hw::loadFrame(s.files.front(), frame)) {
+        if (!clivus::loadFrame(s.files.front(), frame)) {
             std::printf("FAIL decode %s (%s)\n", s.seriesUid.c_str(), s.files.front().c_str());
             ++failures;
             continue;
@@ -59,9 +60,9 @@ int main(int argc, char** argv)
     // Stack cost: what MPR and volume rendering pay once, up front.
     for (const auto& s : series) {
         if (s.files.size() < 2) continue;
-        hw::Volume vol;
+        clivus::Volume vol;
         const auto v0 = std::chrono::steady_clock::now();
-        const bool ok = hw::loadVolume(s, vol);
+        const bool ok = clivus::loadVolume(s, vol);
         const auto v1 = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(v1 - v0).count();
         if (!ok) {

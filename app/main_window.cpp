@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "main_window.h"
 
 #include <QAction>
@@ -17,10 +18,10 @@
 #include "canvas_widget.h"
 
 namespace {
-QIcon thumbnailFor(const hw::SeriesInfo& series)
+QIcon thumbnailFor(const clivus::SeriesInfo& series)
 {
-    hw::ImageFrame frame;
-    if (series.files.empty() || !hw::loadFrame(series.files.front(), frame)) return {};
+    clivus::ImageFrame frame;
+    if (series.files.empty() || !clivus::loadFrame(series.files.front(), frame)) return {};
     std::vector<uint8_t> bytes(frame.pixels.size());
     double c = 0.0, w = 1.0;
     frame.fullWindow(c, w);
@@ -34,7 +35,7 @@ QIcon thumbnailFor(const hw::SeriesInfo& series)
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("horoswin — DICOM spike");
+    setWindowTitle("Clivus — DICOM viewer (research use only)");
     resize(1280, 860);
 
     m_seriesList = new QListWidget(this);
@@ -84,7 +85,7 @@ void MainWindow::openFolder(const QString& dir)
 {
     // shortcut: synchronous scan on the UI thread; move to a worker when folders get big.
     setCursor(Qt::WaitCursor);
-    m_series = hw::scanDirectoryCached(dir.toStdString());
+    m_series = clivus::scanDirectoryCached(dir.toStdString());
     m_seriesList->clear();
     for (const auto& s : m_series) {
         const QString label = QString("%1 · %2\n%3 objects · %4×%5")
@@ -156,8 +157,8 @@ void MainWindow::showSeries(int index)
     m_currentSeries = index;
     m_currentSlice = 0;
 
-    hw::ImageFrame frame;
-    if (!hw::loadFrame(m_series[index].files.front(), frame)) {
+    clivus::ImageFrame frame;
+    if (!clivus::loadFrame(m_series[index].files.front(), frame)) {
         m_status->setText("Failed to decode the first object of this series");
         return;
     }
@@ -173,8 +174,8 @@ void MainWindow::showSlice(int delta)
     const int next = std::clamp(m_currentSlice + delta, 0, int(files.size()) - 1);
     if (next == m_currentSlice) return;
 
-    hw::ImageFrame frame;
-    if (!hw::loadFrame(files[size_t(next)], frame)) return;
+    clivus::ImageFrame frame;
+    if (!clivus::loadFrame(files[size_t(next)], frame)) return;
     m_currentSlice = next;
     m_canvas->setFrame(std::move(frame));
     updateInfo();

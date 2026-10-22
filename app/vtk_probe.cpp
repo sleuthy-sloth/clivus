@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // VTK probe: our Volume -> vtkImageData -> GPU volume rendering, without Qt in the way.
 // Proves three things on this platform: VTK links against the same DCMTK-decoded voxels, spacing and
 // orientation survive the handover, and a 512^2 x N stack renders at interactive cost.
 // Usage: vtk_probe <dicom-folder> [--shot out.png] [--size 900]
 
-#include "hw/index_store.h"
-#include "hw/volume.h"
+#include "clivus/index_store.h"
+#include "clivus/volume.h"
 
 #include <vtkCamera.h>
 #include <vtkColorTransferFunction.h>
@@ -38,16 +39,16 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) size = std::atoi(argv[++i]);
     }
 
-    const auto series = hw::scanDirectoryCached(folder);
+    const auto series = clivus::scanDirectoryCached(folder);
     if (series.empty()) {
         std::printf("no series in %s\n", folder.c_str());
         return 1;
     }
-    const hw::SeriesInfo& s = series.front();
+    const clivus::SeriesInfo& s = series.front();
 
-    hw::Volume vol;
+    clivus::Volume vol;
     const auto t0 = std::chrono::steady_clock::now();
-    if (!hw::loadVolume(s, vol)) {
+    if (!clivus::loadVolume(s, vol)) {
         std::printf("loadVolume failed for %s\n", s.seriesUid.c_str());
         return 1;
     }

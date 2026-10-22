@@ -1,6 +1,7 @@
-#include "hw/series_index.h"
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "clivus/series_index.h"
 
-#include "hw/codecs.h"
+#include "clivus/codecs.h"
 
 #include <dcmtk/dcmdata/dctk.h>
 #include <dcmtk/dcmimgle/dcmimage.h>
@@ -11,7 +12,7 @@
 #include <filesystem>
 #include <map>
 
-namespace hw {
+namespace clivus {
 namespace fs = std::filesystem;
 
 namespace {
@@ -170,4 +171,4 @@ bool loadFrame(const std::string& file, ImageFrame& out)
     return out.valid();
 }
 
-}  // namespace hw
+}  // namespace clivus

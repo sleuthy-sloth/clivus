@@ -1,6 +1,7 @@
-#include "hw/volume.h"
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "clivus/volume.h"
 
-#include "hw/codecs.h"
+#include "clivus/codecs.h"
 
 #include <dcmtk/dcmdata/dctk.h>
 
@@ -8,7 +9,7 @@
 #include <array>
 #include <cmath>
 
-namespace hw {
+namespace clivus {
 namespace {
 
 using Vec3 = std::array<double, 3>;
@@ -152,4 +153,4 @@ bool loadVolume(const SeriesInfo& series, Volume& out)
     return true;
 }
 
-}  // namespace hw
+}  // namespace clivus

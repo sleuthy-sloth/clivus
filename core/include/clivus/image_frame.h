@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <cstdint>
 #include <vector>
 
-namespace hw {
+namespace clivus {
 
 // A single decoded image in modality units (rescale slope/intercept applied).
 struct ImageFrame {
@@ -28,4 +29,4 @@ ImageFrame makeFrame(std::vector<float> stored, int width, int height,
                      float slope = 1.0f, float intercept = 0.0f,
                      bool hasPadding = false, float paddingValue = 0.0f);
 
-}  // namespace hw
+}  // namespace clivus

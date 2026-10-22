@@ -16,7 +16,7 @@
       "inherits": "mac",
       "binaryDir": "${sourceDir}/build/mac-core",
       "cacheVariables": {
-        "HW_BUILD_APP": "OFF"
+        "CLIVUS_BUILD_APP": "OFF"
       }
     },
     {
@@ -37,7 +37,7 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_PREFIX_PATH": "/opt/homebrew/opt/qt",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
-        "HW_BUILD_VTK_PROBE": "ON"
+        "CLIVUS_BUILD_VTK_PROBE": "ON"
       },
       "displayName": "macOS + VTK probe"
     }

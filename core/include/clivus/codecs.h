@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include <string>
 
-namespace hw {
+namespace clivus {
 
 // DCMTK compiles its decoders in but registers none of them: RLE, JPEG, JPEG-LS and JPEG 2000
 // each need their own registerCodecs() call, otherwise a compressed file fails with
@@ -13,4 +14,4 @@ void registerCodecs();
 // that list is a property of the DCMTK build, not of DCMTK itself, so it is worth printing.
 std::string codecSummary();
 
-}  // namespace hw
+}  // namespace clivus

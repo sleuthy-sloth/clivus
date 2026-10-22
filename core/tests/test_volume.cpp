@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Geometry and stack ordering: testdata/volume holds 4 slices of 16x16 whose pixel value identifies the
 // slice index, written in reverse z with InstanceNumber ascending in write order. So a loader that
 // trusts InstanceNumber or filenames puts slice 3 where slice 0 belongs, and the value check fails.
 
-#include "hw/volume.h"
+#include "clivus/volume.h"
 
 #include <cassert>
 #include <cmath>
@@ -14,16 +15,16 @@ int main(int argc, char** argv)
 {
     const std::string dir = argc > 1 ? argv[1] : "testdata/volume";
 
-    hw::SeriesInfo series;
-    for (auto& s : hw::scanDirectory(dir)) series = s;
+    clivus::SeriesInfo series;
+    for (auto& s : clivus::scanDirectory(dir)) series = s;
     if (series.files.empty()) {
         std::printf("volume: no DICOM in %s — skipped\n", dir.c_str());
         return 0;
     }
     assert(series.files.size() == 4);
 
-    hw::Volume vol;
-    const bool loaded = hw::loadVolume(series, vol);
+    clivus::Volume vol;
+    const bool loaded = clivus::loadVolume(series, vol);
     assert(loaded);
     assert(vol.valid());
 

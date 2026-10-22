@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <QElapsedTimer>
 #include <QOpenGLFunctions>
@@ -6,7 +7,7 @@
 #include <chrono>
 #include <vector>
 
-#include "hw/image_frame.h"
+#include "clivus/image_frame.h"
 
 // The 2D slice view: textured quad + its own window/level and pan/zoom.
 // Deliberately legacy GL 2.1 (compatibility profile) - enough to measure the real
@@ -16,7 +17,7 @@ class CanvasWidget : public QOpenGLWidget, protected QOpenGLFunctions {
 public:
     explicit CanvasWidget(QWidget* parent = nullptr);
 
-    void setFrame(hw::ImageFrame frame);   // resets window to the full dynamic range
+    void setFrame(clivus::ImageFrame frame);   // resets window to the full dynamic range
     void resetView();
     void setWindowLevel(double center, double width);
 
@@ -37,7 +38,7 @@ protected:
 private:
     void uploadTexture();
 
-    hw::ImageFrame m_frame;
+    clivus::ImageFrame m_frame;
     std::vector<uint8_t> m_bytes;
     unsigned int m_tex = 0;
     bool m_texDirty = true;

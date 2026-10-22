@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 #!/usr/bin/env python3
 """Write a synthetic 8-slice signed 12-bit CT series (explicit VR little endian).
 

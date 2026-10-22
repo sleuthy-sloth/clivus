@@ -1,9 +1,10 @@
-#include "hw/image_frame.h"
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "clivus/image_frame.h"
 
 #include <algorithm>
 #include <limits>
 
-namespace hw {
+namespace clivus {
 
 ImageFrame makeFrame(std::vector<float> stored, int width, int height,
                      float slope, float intercept, bool hasPadding, float paddingValue)
@@ -58,4 +59,4 @@ void ImageFrame::fullWindow(double& center, double& width) const
     width = std::max(1.0, double(maxValue) - double(minValue));
 }
 
-}  // namespace hw
+}  // namespace clivus

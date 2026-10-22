@@ -1,16 +1,17 @@
-#include "hw/index_store.h"
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "clivus/index_store.h"
 
 #include <sqlite3.h>
 
 #include <algorithm>
 #include <filesystem>
 
-namespace hw {
+namespace clivus {
 namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char* kIndexName = ".horoswin-index.sqlite";
+constexpr const char* kIndexName = ".clivus-index.sqlite";
 constexpr const char* kSchemaVersion = "1";
 
 bool exec(sqlite3* db, const char* sql)
@@ -208,4 +209,4 @@ std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir)
     return series;
 }
 
-}  // namespace hw
+}  // namespace clivus

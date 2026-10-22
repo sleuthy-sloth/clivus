@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include <string>
 #include <vector>
 
-#include "hw/series_index.h"
+#include "clivus/series_index.h"
 
-namespace hw {
+namespace clivus {
 
 // A series decoded into one stack of equally sized slices, ordered geometrically along the slice
 // normal. InstanceNumber is a display hint, not a position — real series arrive out of order, and MPR
@@ -30,4 +31,4 @@ struct Volume {
 // Decodes every slice of the series. Fails when the slices disagree on size or none decode.
 bool loadVolume(const SeriesInfo& series, Volume& out);
 
-}  // namespace hw
+}  // namespace clivus

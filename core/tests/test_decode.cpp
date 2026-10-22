@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Codec matrix: for every transfer syntax in testdata/corpus, is it decoded, and is the result the
 // same pixels as the uncompressed original? Two jobs:
 //   1. it says out loud which decoders this DCMTK build carries (the build decides, not DCMTK);
 //   2. the lossless variants must reproduce MR_small.dcm exactly, so a DCMTK upgrade that silently
 //      changes decompressed values fails the test instead of changing what a radiologist sees.
-#include "hw/codecs.h"
-#include "hw/series_index.h"
+#include "clivus/codecs.h"
+#include "clivus/series_index.h"
 
 #include <dcmtk/dcmdata/dctk.h>
 
@@ -35,7 +36,7 @@ const Case kCases[] = {
     {"rtdose_rle.dcm", "RLE", false},
 };
 
-float maxAbsDiff(const hw::ImageFrame& a, const hw::ImageFrame& b)
+float maxAbsDiff(const clivus::ImageFrame& a, const clivus::ImageFrame& b)
 {
     if (a.width != b.width || a.height != b.height || a.pixels.size() != b.pixels.size())
         return 1e30f;
@@ -55,18 +56,18 @@ int main(int argc, char** argv)
         return 0;   // generated/optional test data: absence is not a failure
     }
 
-    const std::string codecs = hw::codecSummary();
+    const std::string codecs = clivus::codecSummary();
     std::printf("decoders in this build: %s\n\n", codecs.c_str());
 
-    hw::ImageFrame reference;
-    const bool haveReference = hw::loadFrame(dir + "/MR_small.dcm", reference);
+    clivus::ImageFrame reference;
+    const bool haveReference = clivus::loadFrame(dir + "/MR_small.dcm", reference);
 
     int ok = 0, unsupported = 0, failed = 0;
     for (const Case& c : kCases) {
         const std::string path = dir + "/" + c.file;
         const bool present = std::filesystem::exists(path);
-        hw::ImageFrame frame;
-        const bool decoded = present && hw::loadFrame(path, frame);
+        clivus::ImageFrame frame;
+        const bool decoded = present && clivus::loadFrame(path, frame);
 
         // Is the codec this file needs even compiled in? Ask the file, not a table.
         std::string needed = "?";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -29,7 +30,9 @@ int main(int argc, char** argv)
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication app(argc, argv);
-    QApplication::setApplicationName("horoswin");
+    QApplication::setApplicationName("Clivus");
+    QApplication::setApplicationVersion("0.1.0-spike");
+    QApplication::setOrganizationName("clivus");
 
     QCommandLineParser parser;
     const QCommandLineOption bench("bench", "Render N frames headlessly and report timings.", "frames");

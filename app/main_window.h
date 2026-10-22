@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <QMainWindow>
 #include <vector>
 
-#include "hw/index_store.h"
-#include "hw/series_index.h"
+#include "clivus/index_store.h"
+#include "clivus/series_index.h"
 
 class CanvasWidget;
 class QLabel;
@@ -25,7 +26,7 @@ private:
     QListWidget* m_seriesList = nullptr;
     CanvasWidget* m_canvas = nullptr;
     QLabel* m_status = nullptr;
-    std::vector<hw::SeriesInfo> m_series;
+    std::vector<clivus::SeriesInfo> m_series;
     int m_currentSeries = -1;
     int m_currentSlice = 0;
     QString m_timing;

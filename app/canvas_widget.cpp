@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "canvas_widget.h"
 
 #include <QDebug>
@@ -31,7 +32,7 @@ void CanvasWidget::initializeGL()
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 }
 
-void CanvasWidget::setFrame(hw::ImageFrame frame)
+void CanvasWidget::setFrame(clivus::ImageFrame frame)
 {
     m_frame = std::move(frame);
     m_frame.fullWindow(m_center, m_width);

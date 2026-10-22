@@ -10,4 +10,4 @@ testdata/corpus/syn-*.dcm
 
 # real clinical series for local checks (de-identified TCIA data, not committed)
 testdata/real/
-testdata/corpus/.horoswin-index.sqlite*
+testdata/corpus/.clivus-index.sqlite*

@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include "hw/series_index.h"
+#include "clivus/series_index.h"
 
 #include <string>
 #include <vector>
 
 struct sqlite3;
 
-namespace hw {
+namespace clivus {
 
-// On-disk series index for one data folder: <folder>/.horoswin-index.sqlite.
+// On-disk series index for one data folder: <folder>/.clivus-index.sqlite.
 //
 // A rescan of a folder costs one DCMTK header parse per file (~0.2 ms each on a real series), which is
 // fine once but wasteful on every start. The index is keyed on a fingerprint of the folder contents, so
@@ -43,4 +44,4 @@ private:
 // DICOM headers at all.
 std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir);
 
-}  // namespace hw
+}  // namespace clivus

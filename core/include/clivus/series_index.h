@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <string>
 #include <vector>
 
-#include "hw/image_frame.h"
+#include "clivus/image_frame.h"
 
-namespace hw {
+namespace clivus {
 
 struct SeriesInfo {
     std::string seriesUid;
@@ -25,4 +26,4 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir);
 // Decode one object. Multi-frame objects yield frame 0 only.
 bool loadFrame(const std::string& file, ImageFrame& out);
 
-}  // namespace hw
+}  // namespace clivus

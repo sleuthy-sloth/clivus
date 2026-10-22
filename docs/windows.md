@@ -12,11 +12,11 @@ Nothing to buy, and no toolchain needed on the Windows machine.
 
 1. Push this repo to GitHub (public = free minutes).
 2. Actions → **windows-app** → *Run workflow*. It builds with MSVC, runs `ctest`, and uploads a
-   `horoswin-windows-x64` artifact: the exe, Qt DLLs, the DCMTK DLLs, and the test corpus.
+   `clivus-windows-x64` artifact: the exe, Qt DLLs, the DCMTK DLLs, and the test corpus.
 3. On any Windows machine — a friend's laptop, a lab PC, work — download the artifact, unzip, then:
 
    ```powershell
-   .\horoswin.exe .\corpus --bench 150
+   .\clivus.exe .\corpus --bench 150
    ```
 
 That is the whole test: two minutes, no installs. Only two lines matter: the `GL …` renderer line and the
@@ -97,8 +97,8 @@ Get a real series first — the runbook assumes `testdata/corpus` (committed) an
 series in `testdata\real\` (50 slices, 512², from `4D-Lung`):
 
 ```powershell
-build\Release\app\horoswin.exe testdata\corpus --bench 150
-build\Release\app\horoswin.exe testdata\real --bench 150
+build\Release\app\clivus.exe testdata\corpus --bench 150
+build\Release\app\clivus.exe testdata\real --bench 150
 ```
 
 The first thing to read is the line the canvas prints at startup:
@@ -124,7 +124,7 @@ the canvas.
 ## 5. Then VTK (v1 scope, separate step)
 
 VTK 9 is the remaining unknown for MPR/3D, and it changes the canvas. The bridge itself is already built
-and measured on macOS — `hw::Volume` → `vtkImageData` → `vtkSmartVolumeMapper` renders a 50-slice 512²
+and measured on macOS — `clivus::Volume` → `vtkImageData` → `vtkSmartVolumeMapper` renders a 50-slice 512²
 series at 8 ms/frame on the GPU (`app/vtk_probe.cpp`, `cmake --preset mac-vtk`) — so on Windows this step
 is about the *build*, not about whether the approach works:
 

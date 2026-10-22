@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Assert-style self-check for the pixel math; no test framework on purpose.
-#include "hw/image_frame.h"
+#include "clivus/image_frame.h"
 
 #include <cmath>
 #include <cstdio>
@@ -19,7 +20,7 @@ void eq(double got, double want, const char* what) { check(std::fabs(got - want)
 
 int main()
 {
-    using namespace hw;
+    using namespace clivus;
 
     // 1. rescale is applied, range follows the transformed values
     {

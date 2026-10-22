@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The index is a cache, so what matters is: it round-trips, it survives a restart, and it misses when
 // the folder changes. No DICOM files needed — SeriesInfo is plain data.
-#include "hw/index_store.h"
+#include "clivus/index_store.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -21,9 +22,9 @@ void expect(bool ok, const char* what)
     }
 }
 
-hw::SeriesInfo makeSeries(const std::string& uid, int width, std::vector<std::string> files)
+clivus::SeriesInfo makeSeries(const std::string& uid, int width, std::vector<std::string> files)
 {
-    hw::SeriesInfo s;
+    clivus::SeriesInfo s;
     s.seriesUid = uid;
     s.studyUid = "1.2.3";
     s.modality = "CT";
@@ -50,20 +51,20 @@ int main()
         std::ofstream(dir / name) << "not really dicom";
     }
 
-    const std::vector<hw::SeriesInfo> written = {
+    const std::vector<clivus::SeriesInfo> written = {
         makeSeries("1.2.3.1", 512, {(dir / "a.dcm").string(), (dir / "b.dcm").string()}),
         makeSeries("1.2.3.2", 64, {(dir / "b.dcm").string()}),
     };
 
     {
-        hw::IndexStore store;
+        clivus::IndexStore store;
         expect(store.open(dir.string()), "open a fresh index");
         expect(store.load().empty(), "fresh index has no series");
         store.save(written);
     }
 
     {
-        hw::IndexStore store;   // second instance: this is the restart case
+        clivus::IndexStore store;   // second instance: this is the restart case
         expect(store.open(dir.string()), "reopen an existing index");
         const auto loaded = store.load();
         expect(loaded.size() == 2, "two series survive a restart");
@@ -78,16 +79,16 @@ int main()
 
     {   // a new file makes the folder changed -> cache miss, not stale data
         std::ofstream(dir / "c.dcm") << "another";
-        hw::IndexStore store;
+        clivus::IndexStore store;
         expect(store.open(dir.string()), "open after change");
         expect(store.load().empty(), "changed folder invalidates the cache");
     }
 
     {   // and saving again after the change makes it a hit
-        hw::IndexStore store;
+        clivus::IndexStore store;
         store.open(dir.string());
         store.save(written);
-        hw::IndexStore again;
+        clivus::IndexStore again;
         again.open(dir.string());
         expect(again.load().size() == 2, "rescan re-establishes the cache");
     }
