@@ -7,3 +7,7 @@ compile_commands.json
 testdata/synthetic512/
 testdata/synthetic1024/
 testdata/corpus/syn-*.dcm
+
+# real clinical series for local checks (de-identified TCIA data, not committed)
+testdata/real/
+testdata/corpus/.horoswin-index.sqlite*

@@ -95,9 +95,23 @@ header-only: ~5 ms for 10 objects. So the CPU side of a drag is ~2 orders of mag
 under the 16.7 ms budget — the 60 fps question is now about GL/VTK on Windows, not about
 our pixel path.
 
+## Series index (restart persistence)
+
+Opening a folder writes `<folder>/.horoswin-index.sqlite` next to the data. The index is keyed on a
+fingerprint of the folder (file count, newest mtime, total bytes), so an unchanged folder is served
+from the cache in ~1 ms and a changed one simply misses and rescans — no invalidation logic to get wrong.
+
+| Folder (50-slice real CT series) | scan |
+|---|---|
+| first start, no index | 29.7 ms |
+| every start after that | 1.2–1.7 ms |
+
+Same numbers for `testdata/corpus` (10 objects, mixed syntaxes). First-time scans still run
+synchronously on the UI thread; at ~0.6 ms per object that is fine for a folder and a ticket for a
+whole study archive.
+
 ## Deliberately not here yet
 
-- SQLite index / persistence (P0; scan is in-memory, synchronous on the UI thread)
 - Colour images, multi-frame objects (frame 0 only), presentation LUTs, MONOCHROME1
 - JPEG 2000 **on macOS**: brew's DCMTK has no J2K decoder, so J2K is only exercised by Windows CI
   (vcpkg `dcmtk[openjpeg]`) until this tree vendors its own DCMTK build

@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <vector>
 
+#include "hw/index_store.h"
 #include "hw/series_index.h"
 
 class CanvasWidget;

@@ -84,7 +84,7 @@ void MainWindow::openFolder(const QString& dir)
 {
     // shortcut: synchronous scan on the UI thread; move to a worker when folders get big.
     setCursor(Qt::WaitCursor);
-    m_series = hw::scanDirectory(dir.toStdString());
+    m_series = hw::scanDirectoryCached(dir.toStdString());
     m_seriesList->clear();
     for (const auto& s : m_series) {
         const QString label = QString("%1 · %2\n%3 objects · %4×%5")
