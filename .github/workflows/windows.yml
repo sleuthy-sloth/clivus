@@ -28,6 +28,13 @@ jobs:
       # VS instance is not always discoverable by CMake's VS generator, while cl.exe on PATH is.
       - uses: ilammy/msvc-dev-cmd@v1
 
+      # The pinned builtin-baseline in vcpkg.json can be newer than the vcpkg snapshot baked into the
+      # runner image; without this fetch, configure dies with "failed to `git show`
+      # versions/baseline.json". Tags-only fetch keeps it cheap.
+      - name: Fetch the pinned vcpkg baseline into the runner clone
+        shell: pwsh
+        run: git -C $env:VCPKG_INSTALLATION_ROOT fetch origin --tags --force --depth=200
+
       - name: Configure
         shell: pwsh
         run: >

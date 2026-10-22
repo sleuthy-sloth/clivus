@@ -33,6 +33,12 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
+      # Same reason as windows.yml: vcpkg.json's builtin-baseline may be newer than the clone on the
+      # runner image, and vcpkg cannot fetch it by itself.
+      - name: Fetch the pinned vcpkg baseline into the runner clone
+        shell: pwsh
+        run: git -C $env:VCPKG_INSTALLATION_ROOT fetch origin --tags --force --depth=200
+
       - name: Configure
         shell: pwsh
         run: >
