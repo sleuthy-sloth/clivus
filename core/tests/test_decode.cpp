@@ -30,7 +30,9 @@ const Case kCases[] = {
     {"MR_small_RLE.dcm", "RLE", true},
     {"MR_small_jp2klossless.dcm", "JPEG 2000", true},
     {"JPEG2000.dcm", "JPEG 2000", false},
-    {"693_J2KI.dcm", "JPEG 2000", false},
+    // Lossy JPEG 2000 on a 12-bit object. The slice that used to sit here was a CQ500 study object,
+    // whose terms do not allow redistributing it in a source repo; MR2_J2KI ships with pydicom.
+    {"MR2_J2KI.dcm", "JPEG 2000", false},
     {"JPEGLSNearLossless_08.dcm", "JPEG-LS", false},
     {"JPEGLSNearLossless_16.dcm", "JPEG-LS", false},
     {"rtdose_rle.dcm", "RLE", false},

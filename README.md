@@ -74,7 +74,7 @@ Qt/DCMTK DLLs + test corpus) as an artifact, so testing on any borrowed Windows 
 | Explicit VR LE | CT_small, MR_small | ok | ok |
 | RLE Lossless | MR_small_RLE (16-bit), rtdose_rle (32-bit, 15 frames) | ok, pixel-identical to MR_small | ok |
 | JPEG-LS Lossless / Near-lossless | MR_small_jpeg_ls_lossless, JPEGLSNearLossless_08/16 | ok, lossless variant pixel-identical | ok |
-| JPEG 2000 Lossless / Lossy | MR_small_jp2klossless, JPEG2000, 693_J2KI | **not in this build** | asserted identical to MR_small |
+| JPEG 2000 Lossless / Lossy | MR_small_jp2klossless, JPEG2000, MR2_J2KI | **not in this build** | asserted identical to MR_small |
 
 The three lossless variants of `MR_small` must decode to **exactly** the uncompressed pixels, so a
 DCMTK upgrade that silently changes decompressed values fails the test instead of quietly changing
