@@ -3,3 +3,7 @@ build-*/
 vcpkg_installed/
 .DS_Store
 compile_commands.json
+# generated synthetic corpus (regenerate with testdata/make_synthetic.py)
+testdata/synthetic512/
+testdata/synthetic1024/
+testdata/corpus/syn-*.dcm
