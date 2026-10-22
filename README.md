@@ -23,6 +23,7 @@ macOS (Homebrew Qt6 + DCMTK):
 brew install qt dcmtk
 cmake --preset mac && cmake --build --preset mac
 build/mac/core/hw_test_image_frame                 # pixel-math checks
+build/mac/core/hw_test_decode testdata/corpus      # codec matrix
 build/mac/core/hw_measure testdata/corpus          # headless decode + window cost
 build/mac/app/horoswin testdata/corpus             # GUI
 build/mac/app/horoswin testdata/synthetic512 --bench 150   # fps at 512²
@@ -42,6 +43,41 @@ ctest --preset win
 
 CI builds and tests **core only** on `windows-latest` (`.github/workflows/windows.yml`);
 `vcpkg install dcmtk` from source is slow the first time and Qt is deliberately not installed there.
+
+## Codecs — what actually decodes
+
+`hw_test_decode testdata/corpus` is the matrix. Two findings it exists for:
+
+1. **DCMTK registers no decoder by default.** RLE, JPEG, JPEG-LS and JPEG 2000 each need their own
+   `…Registration::registerCodecs()` call; without it every compressed object fails with
+   `can't change to unencapsulated representation for pixel data`. `core/src/codecs.cpp` does it once,
+   guarded by `__has_include` on the codec headers so a DCMTK built without a codec still compiles.
+2. **Whether JPEG 2000 decodes is a property of the DCMTK build, not of DCMTK.** Homebrew's does not
+   include it (`decoders: RLE, JPEG, JPEG-LS`); vcpkg's does with the `openjpeg` feature, which is why
+   `vcpkg.json` requests it — on Windows CI the matrix must decode `MR_small_jp2klossless.dcm` and fail
+   if it doesn't.
+
+| Transfer syntax | Test object | This build (brew DCMTK 3.7.1) | Windows CI (vcpkg + openjpeg) |
+|---|---|---|---|
+| Explicit VR LE | CT_small, MR_small | ok | ok |
+| RLE Lossless | MR_small_RLE (16-bit), rtdose_rle (32-bit, 15 frames) | ok, pixel-identical to MR_small | ok |
+| JPEG-LS Lossless / Near-lossless | MR_small_jpeg_ls_lossless, JPEGLSNearLossless_08/16 | ok, lossless variant pixel-identical | ok |
+| JPEG 2000 Lossless / Lossy | MR_small_jp2klossless, JPEG2000, 693_J2KI | **not in this build** | asserted identical to MR_small |
+
+The three lossless variants of `MR_small` must decode to **exactly** the uncompressed pixels, so a
+DCMTK upgrade that silently changes decompressed values fails the test instead of quietly changing
+what a radiologist sees. Lossy and near-lossless objects are smoke-tested for dimensions only.
+
+Two loader behaviours the matrix forced:
+
+- Encapsulated pixel data is decompressed with `DcmItem::chooseRepresentation(EXS_LittleEndianExplicit)`
+  before `DicomImage` sees it. `DicomImage`'s own encapsulated path rejects valid objects (32-bit RLE
+  RT Dose), while the codec path handles them — one code path for every file, compressed or not.
+- 32-bit multi-frame objects hand back the whole frame stack in one buffer, so the loader clamps to
+  `width*height` (frame 0) rather than assuming one frame.
+
+RT Dose also carries `DoseGridScaling` instead of `RescaleSlope`, which the loader does not apply yet
+(hence raw ranges like [795000, 1254000] for `rtdose_rle.dcm`) — a ticket, not a bug in decoding.
 
 ## Measured (Apple M-series, macOS, Qt 6.12 + DCMTK 3.7.1, release build)
 
@@ -63,15 +99,15 @@ our pixel path.
 
 - SQLite index / persistence (P0; scan is in-memory, synchronous on the UI thread)
 - Colour images, multi-frame objects (frame 0 only), presentation LUTs, MONOCHROME1
-- Compressed transfer syntaxes beyond whatever the local DCMTK build ships (JPEG-LS / J2K need
-  a real corpus before they can be trusted); no Kakadu
+- JPEG 2000 **on macOS**: brew's DCMTK has no J2K decoder, so J2K is only exercised by Windows CI
+  (vcpkg `dcmtk[openjpeg]`) until this tree vendors its own DCMTK build
 - VTK / MPR / 3D (decided for v1, starts after the spike)
 - Measurement tools, PACS networking, plugin ABI
 - Any Grøk/AGPL component — the shipped Horos 4.0.1 statically contains it; this tree does not
 
 ## Next tickets after the spike
 
-1. Real corpus + codec matrix (CT/MR/US, J2K and JPEG-LS objects, expected pixel checksums)
+1. ~~Real corpus + codec matrix~~ (done: `core/tests/test_decode.cpp`; J2K asserted on Windows CI)
 2. SQLite series index with restart persistence
 3. Window/level correctness vs Horos on the same objects (WC/WW parity test, pixel diff)
 4. VTK 9 static build + `QVTKOpenGLNativeWidget` swap for the canvas

@@ -2,6 +2,11 @@
   "name": "horoswin",
   "version-string": "0.1.0",
   "dependencies": [
-    "dcmtk"
+    {
+      "name": "dcmtk",
+      "features": [
+        "openjpeg"
+      ]
+    }
   ]
 }

@@ -1,6 +1,7 @@
 // Headless smoke test + frame-cost measurement: scan a folder, decode, window, report timings.
 // The GUI adds GL texture upload + draw on top of this; this isolates the CPU cost the
 // canvas pays on every window/level change.
+#include "hw/codecs.h"
 #include "hw/series_index.h"
 
 #include <chrono>
@@ -15,6 +16,7 @@ int main(int argc, char** argv)
         return 2;
     }
     const int iterations = argc > 2 ? std::atoi(argv[2]) : 100;
+    std::printf("decoders: %s\n", hw::codecSummary().c_str());
     const auto t0 = std::chrono::steady_clock::now();
     const auto series = hw::scanDirectory(argv[1]);
     const auto t1 = std::chrono::steady_clock::now();

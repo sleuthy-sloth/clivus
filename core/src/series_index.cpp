@@ -1,5 +1,7 @@
 #include "hw/series_index.h"
 
+#include "hw/codecs.h"
+
 #include <dcmtk/dcmdata/dctk.h>
 #include <dcmtk/dcmimgle/dcmimage.h>
 #include <dcmtk/dcmimgle/dimopx.h>
@@ -30,10 +32,13 @@ long instanceNumber(DcmItem* ds)
 }
 
 // Internal representation -> float, without any modality transform (we apply slope/intercept).
-bool interDataToFloat(const DiMonoPixel* px, std::vector<float>& out)
+// maxPixels keeps us on frame 0: for some pixel types DicomImage hands back the whole stack
+// (a 15-frame 32-bit RT Dose reports 1500 pixels for a 10x10 image), and frames are contiguous.
+bool interDataToFloat(const DiMonoPixel* px, size_t maxPixels, std::vector<float>& out)
 {
     if (!px || !px->getData()) return false;
-    const size_t n = size_t(px->getCount());
+    const size_t n = std::min(size_t(px->getCount()), maxPixels);
+    if (n == 0) return false;
     const void* d = px->getData();
     out.resize(n);
     switch (px->getRepresentation()) {
@@ -52,6 +57,7 @@ bool interDataToFloat(const DiMonoPixel* px, std::vector<float>& out)
 
 std::vector<SeriesInfo> scanDirectory(const std::string& dir)
 {
+    registerCodecs();
     std::map<std::string, SeriesInfo> bySeries;
     std::map<std::string, std::vector<std::pair<long, std::string>>> sortKeys;
 
@@ -109,14 +115,21 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir)
 
 bool loadFrame(const std::string& file, ImageFrame& out)
 {
+    registerCodecs();
     DcmFileFormat ff;
     if (ff.loadFile(file.c_str()).bad()) return false;
     DcmDataset* ds = ff.getDataset();
     if (!ds) return false;
 
+    // Decompress encapsulated pixel data before DicomImage sees it. DicomImage's own encapsulated
+    // path refuses objects that are perfectly valid through the codecs (32-bit RLE RT Dose is the
+    // case we have), while chooseRepresentation goes straight through them. One path for every file:
+    // normalize to little-endian explicit, then hand DicomImage plain pixel data.
+    if (ds->chooseRepresentation(EXS_LittleEndianExplicit, nullptr).bad()) return false;
+
     // CIF_IgnoreModalityTransformation: keep stored values and apply slope/intercept ourselves,
     // so the window/level numbers match what Horos shows for the same object.
-    DicomImage img(ds, ds->getOriginalXfer(), CIF_IgnoreModalityTransformation);
+    DicomImage img(ds, EXS_LittleEndianExplicit, CIF_IgnoreModalityTransformation);
     if (img.getStatus() != EIS_Normal || img.getFrameCount() < 1) return false;
     if (!img.isMonochrome()) return false;   // colour images: P1 ticket (planar config / PALETTE COLOR)
 
@@ -126,7 +139,7 @@ bool loadFrame(const std::string& file, ImageFrame& out)
     if (!mono) return false;
     // shortcut: frame 0 only; multi-frame objects (US cine, enhanced CT) need per-frame access.
     std::vector<float> raw;
-    if (!interDataToFloat(mono, raw)) return false;
+    if (!interDataToFloat(mono, size_t(img.getWidth()) * size_t(img.getHeight()), raw)) return false;
 
     float slope = 1.0f;
     float intercept = 0.0f;

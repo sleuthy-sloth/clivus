@@ -1,6 +1,7 @@
 find_package(DCMTK REQUIRED)
 
 add_library(hw_core STATIC
+    src/codecs.cpp
     src/image_frame.cpp
     src/series_index.cpp
 )
@@ -17,3 +18,8 @@ target_link_libraries(hw_measure PRIVATE hw_core)
 add_executable(hw_test_image_frame tests/test_image_frame.cpp)
 target_link_libraries(hw_test_image_frame PRIVATE hw_core)
 add_test(NAME image_frame COMMAND hw_test_image_frame)
+
+# Needs testdata/corpus; skips itself when that folder is absent (it is regenerated, not committed).
+add_executable(hw_test_decode tests/test_decode.cpp)
+target_link_libraries(hw_test_decode PRIVATE hw_core)
+add_test(NAME decode_matrix COMMAND hw_test_decode "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
