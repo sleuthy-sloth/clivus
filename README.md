@@ -47,6 +47,10 @@ installed there because that job is about pixels and codecs, not widgets. `.gith
 is manual-only and compiles the GUI with MSVC. Neither can measure fps: that needs a real GPU, and
 `docs/windows.md` is the runbook for the machine that has one.
 
+You do not need to own that machine: the **windows-app** workflow uploads a runnable `dist` folder (exe +
+Qt/DCMTK DLLs + test corpus) as an artifact, so testing on any borrowed Windows machine is
+`horoswin.exe .\corpus --bench 150` — no toolchain, no purchase. See `docs/windows.md` §0.
+
 ## Codecs — what actually decodes
 
 `hw_test_decode testdata/corpus` is the matrix. Two findings it exists for:

@@ -6,10 +6,31 @@ VTK 9 build static there. This file is the order to answer them in, with pass cr
 
 Everything below takes ~90 minutes on a fresh machine, most of it waiting for vcpkg.
 
+## 0. Zero-cost route: run the CI-built folder on a borrowed machine
+
+Nothing to buy, and no toolchain needed on the Windows machine.
+
+1. Push this repo to GitHub (public = free minutes).
+2. Actions → **windows-app** → *Run workflow*. It builds with MSVC, runs `ctest`, and uploads a
+   `horoswin-windows-x64` artifact: the exe, Qt DLLs, the DCMTK DLLs, and the test corpus.
+3. On any Windows machine — a friend's laptop, a lab PC, work — download the artifact, unzip, then:
+
+   ```powershell
+   .\horoswin.exe .\corpus --bench 150
+   ```
+
+That is the whole test: two minutes, no installs. Only two lines matter: the `GL …` renderer line and the
+`bench …` line. An ordinary laptop iGPU is a *better* answer than a virtual machine's virtual GPU,
+so a borrowed one is not a compromise.
+
+The runner has no GPU, so its own bench run (software GL) proves only that the binary loads and the
+canvas can create a context — it never answers the fps question.
+
 ## 1. Pick the box
 
 | Option | Cost | Answers |
 |---|---|---|
+| **Borrowed Windows laptop + the CI artifact** (§0) | **free** | the real answer, on real silicon |
 | **Parallels Desktop + Windows 11 ARM** on this Mac | ~$100/yr, free Windows ARM ISO via Microsoft | compile, run, GL renderer name, fps *indicative* |
 | **VMware Fusion 13** (free for personal use) + Windows 11 ARM | free | same as above, weaker 3D |
 | Used x86-64 mini PC with a real GPU (e.g. GTX/RTX or Iris Xe) | ~$200–400 | the actual answer: 60 fps on real silicon |

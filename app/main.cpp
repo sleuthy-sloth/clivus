@@ -1,3 +1,7 @@
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QSurfaceFormat>
@@ -6,6 +10,15 @@
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // The app is a WIN32 subsystem executable, so it has no console of its own and --bench output would
+    // disappear. Reattach to the terminal that launched us; double-clicked launches fail harmlessly.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+    }
+#endif
+
     // Ask for a compatibility profile explicitly: the canvas draws a textured quad with fixed-function
     // GL, which a core profile refuses. On Windows this also decides whether Qt uses the GPU driver or
     // falls back to software rendering, so it must be set before QApplication exists.
