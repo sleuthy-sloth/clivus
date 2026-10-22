@@ -35,6 +35,20 @@ jobs:
           -DCLIVUS_BUILD_APP=OFF
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
+      # What this DCMTK build actually carries. vcpkg's dcmtk[openjpeg] feature is requested in
+      # vcpkg.json, but the runtime still reports no JPEG 2000 decoder — this step says whether the
+      # module, the header or neither is missing, which decides how J2K gets fixed.
+      - name: DCMTK codec modules present
+        shell: pwsh
+        run: |
+          foreach ($n in 'dcmjp2k','dcmjpls','dcmjpeg','dcmtkcharls') {
+            $h = Test-Path "build\vcpkg_installed\x64-windows\include\dcmtk\$n"
+            $l = (Get-ChildItem "build\vcpkg_installed\x64-windows\lib" -Filter "$n*" -ErrorAction SilentlyContinue | Measure-Object).Count
+            $d = (Get-ChildItem "build\vcpkg_installed\x64-windows\bin" -Filter "$n*" -ErrorAction SilentlyContinue | Measure-Object).Count
+            "module {0,-14} header={1,-5} libs={2} dlls={3}" -f $n, $h, $l, $d
+          }
+          "dcmtk version: " + (Get-Content build\vcpkg_installed\vcpkg\info\dcmtk_*.list -TotalCount 1)
+
       - name: Build
         run: cmake --build build --parallel
 
