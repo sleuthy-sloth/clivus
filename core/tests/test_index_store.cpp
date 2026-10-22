@@ -93,6 +93,20 @@ int main()
         expect(again.load().size() == 2, "rescan re-establishes the cache");
     }
 
+    {   // A series row with no series_file rows: the LEFT JOIN hands it back with a NULL path, which is
+        // how the app ends up holding a SeriesInfo with an empty file list. It must round-trip intact,
+        // because every caller that then does files.front() has to guard for it.
+        clivus::IndexStore store;
+        expect(store.open(dir.string()), "open before writing a fileless series");
+        store.save({makeSeries("1.2.3.3", 32, {})});
+        clivus::IndexStore again;
+        expect(again.open(dir.string()), "reopen after writing a fileless series");
+        const auto loaded = again.load();
+        expect(loaded.size() == 1, "fileless series row survives the round trip");
+        expect(!loaded.empty() && loaded[0].seriesUid == "1.2.3.3", "fileless series keeps its uid");
+        expect(!loaded.empty() && loaded[0].files.empty(), "fileless series loads with an empty file list");
+    }
+
     fs::remove_all(dir, ec);
     if (failures == 0) std::printf("index_store: all checks passed\n");
     return failures == 0 ? 0 : 1;

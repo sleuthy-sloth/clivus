@@ -113,6 +113,9 @@ void MainWindow::runBenchmark(int frames, int seriesRow)
 {
     if (m_seriesList->count() == 0) return;
     m_seriesList->setCurrentRow(std::min(seriesRow, m_seriesList->count() - 1));
+    // Selecting a row with no files leaves no current series (showSeries() declines it), so the
+    // timer below would index m_series with -1.
+    if (m_currentSeries < 0) return;
 
     auto windows = std::make_shared<std::vector<double>>();
     auto paints = std::make_shared<std::vector<double>>();
@@ -154,11 +157,19 @@ void MainWindow::runBenchmark(int frames, int seriesRow)
 void MainWindow::showSeries(int index)
 {
     if (index < 0 || index >= int(m_series.size())) return;
+    const auto& files = m_series[size_t(index)].files;
+    // The index is a LEFT JOIN, so a series row can come back with no files at all: front() on it
+    // would be undefined behaviour, and there is nothing to show anyway.
+    if (files.empty()) {
+        m_currentSeries = -1;
+        m_status->setText("This series has no objects in the index");
+        return;
+    }
     m_currentSeries = index;
     m_currentSlice = 0;
 
     clivus::ImageFrame frame;
-    if (!clivus::loadFrame(m_series[index].files.front(), frame)) {
+    if (!clivus::loadFrame(files.front(), frame)) {
         m_status->setText("Failed to decode the first object of this series");
         return;
     }
@@ -171,6 +182,7 @@ void MainWindow::showSlice(int delta)
 {
     if (m_currentSeries < 0) return;
     const auto& files = m_series[size_t(m_currentSeries)].files;
+    if (files.empty()) return;   // clamp() would give an upper bound of -1 here
     const int next = std::clamp(m_currentSlice + delta, 0, int(files.size()) - 1);
     if (next == m_currentSlice) return;
 
