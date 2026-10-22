@@ -117,6 +117,32 @@ Same numbers for `testdata/corpus` (10 objects, mixed syntaxes). First-time scan
 synchronously on the UI thread; at ~0.6 ms per object that is fine for a folder and a ticket for a
 whole study archive.
 
+## Volume stacks and VTK (macOS, opt-in)
+
+`loadVolume()` in `core/src/volume.cpp` decodes a whole series into one stack ordered **by position along
+the slice normal**, not by `InstanceNumber` — real series arrive out of order and MPR/3D produce wrong
+images if you trust filenames. Spacing comes from `PixelSpacing` and the median gap between slice
+positions. Test `volume` uses a committed 4-slice series whose pixel value names its own slice index and
+whose filenames run backwards, so trusting either filenames or `InstanceNumber` fails it.
+
+Real series (TCIA `4D-Lung`, 50 × 512², 0.88/0.88/3.00 mm): whole stack in **58–100 ms**, 50 MB.
+
+VTK 9 is a separate, opt-in build (`cmake --preset mac-vtk`, `HW_BUILD_VTK_PROBE=ON`):
+
+```
+build/mac-vtk/app/vtk_probe testdata/real --shot /tmp/vtk-ct.png
+volume 512x512x50 spacing 0.88/0.88/3.00 mm, 50 MB, load 58 ms
+first frame 163 ms (includes GPU upload), second 8 ms renderer=GPU
+```
+
+`app/vtk_probe.cpp` is deliberately Qt-free: it proves `hw::Volume` → `vtkImageData` → GPU volume mapper
+without dragging widget integration into the question. Homebrew's VTK 9.7.1 does ship `GUISupportQt`
+(Qt 6.12), so `QVTKOpenGLNativeWidget` is available for the real viewer later.
+
+Note on the tests: they are `assert`-based, and `Release`/`RelWithDebInfo` define `NDEBUG`, which erases
+every check while the test still prints "all checks passed". `core/CMakeLists.txt` strips `NDEBUG` for
+test targets only; without that the CI suite proved nothing.
+
 ## Deliberately not here yet
 
 - Colour images, multi-frame objects (frame 0 only), presentation LUTs, MONOCHROME1

@@ -123,7 +123,10 @@ the canvas.
 
 ## 5. Then VTK (v1 scope, separate step)
 
-VTK 9 is the remaining unknown for MPR/3D, and it changes the canvas:
+VTK 9 is the remaining unknown for MPR/3D, and it changes the canvas. The bridge itself is already built
+and measured on macOS — `hw::Volume` → `vtkImageData` → `vtkSmartVolumeMapper` renders a 50-slice 512²
+series at 8 ms/frame on the GPU (`app/vtk_probe.cpp`, `cmake --preset mac-vtk`) — so on Windows this step
+is about the *build*, not about whether the approach works:
 
 ```powershell
 vcpkg install vtk[core,opengl,renderingcontext]:x64-windows-static
