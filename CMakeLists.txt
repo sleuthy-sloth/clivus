@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 # The one place the version lives: vcpkg.json does not repeat it, and the GUI reports this header
 # instead of its own string.
-project(clivus VERSION 0.1.0 LANGUAGES CXX)
+# Single source of the version: cmake/version.h.in feeds CLIVUS_VERSION (About, window title,
+# the manual). It fell behind the release tags through v0.1.1/v0.1.2 — keep it in step from here.
+project(clivus VERSION 0.1.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

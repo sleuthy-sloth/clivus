@@ -121,6 +121,11 @@ const Chapter kChapters[] = {
  "<tr><td>Fit image</td><td>F</td><td>Window</td></tr>"
  "<tr><td>Open folder</td><td>Ctrl+O</td><td>Window</td></tr>"
  "<tr><td>Toggle series sidebar</td><td>Ctrl+B</td><td>Window</td></tr>"
+ "<tr><td>Measurement tool</td><td>M</td><td>Window (left-drag then measures)</td></tr>"
+ "<tr><td>Distance</td><td>Left-drag</td><td>Image canvas, Measure tool active</td></tr>"
+ "<tr><td>Angle</td><td>Shift+click three points</td><td>Image canvas, Measure tool active</td></tr>"
+ "<tr><td>Browse a slice directly</td><td>Click or drag the slice strip</td><td>Under the image</td></tr>"
+ "<tr><td>Open by dropping</td><td>Drop a folder or file on the window</td><td>Window</td></tr>"
  "<tr><td>Show diagnostics</td><td>Ctrl+D</td><td>Window</td></tr>"
  "<tr><td>Find series</td><td>Ctrl+F</td><td>Window</td></tr>"
  "<tr><td>User manual</td><td>F1</td><td>Window</td></tr>"
@@ -134,6 +139,23 @@ const Chapter kChapters[] = {
  "<p>Nothing else is stored. Clivus does not remember which folders you opened, and never "
  "stores patient information: a viewer of medical images should not leave a trail of what was "
  "opened on shared machines.</p>"},
+{"Measuring",
+ "<p>The Measure tool turns the left drag into a measuring gesture: while it is the active tool, "
+ "left-drag draws a distance, and Shift+clicking three points draws an angle (the second click is "
+ "the vertex). Right-drag still pans, the wheel still changes slices, and switching to any other "
+ "tool restores window/level on the left drag.</p>"
+ "<p>Distances are reported in millimetres from the object's DICOM Pixel Spacing. When an object "
+ "carries no usable spacing the label says <i>spacing unknown</i> — the app will not invent a "
+ "number. Measurements belong to the slice they were drawn on: changing slice or series clears "
+ "them, and Tools &#9656; Clear measurements removes them at once.</p>"},
+{"MPR (research/experimental)",
+ "<p>View &#9656; MPR opens a three-plane window — axial, coronal and sagittal — resliced through "
+ "the study's own geometry. Scroll any plane with its wheel or strip and the other two show "
+ "hairline crosshairs through that position. Window/level is shared across the three planes.</p>"
+ "<p>This is a first round: reslicing is nearest-neighbour (no interpolation across slices, so "
+ "nothing is invented between them), and the entry is disabled for studies whose objects do not "
+ "all report image position and orientation. The single-series view remains the default and MPR "
+ "never replaces it.</p>"},
 {"Troubleshooting",
  "<p><b>A folder opens but no series appear.</b> The folder may hold files without DICOM "
  "pixel data, or be the wrong folder entirely. Check the content, or try a folder you know "

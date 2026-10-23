@@ -75,6 +75,15 @@ Real, working, test-backed:
 - **Load volumes in physically correct order.** Sorted by position along the
   scan normal, spacing from real geometry, unit-tested against shuffled
   filenames and `InstanceNumber`.
+- **Measure.** Distance in millimetres from each object's Pixel Spacing and
+  angles through a three-click gesture. When an object carries no spacing the
+  label says so — the app never invents a millimetre value.
+- **Reslice in three planes.** Axial, coronal and sagittal side by side, synced
+  through the scanner's own geometry with hairline crosshairs, shared
+  window/level, and an honest disable for studies without per-slice geometry.
+  First round: nearest-neighbour, labelled experimental.
+- **Drag a folder straight in.** Drop a folder (or one DICOM file) anywhere on
+  the window and it opens like File &#9656; Open.
 
 The pipeline in one sentence: point it at a folder, click a series, drag the
 window, watch 60 fps.
