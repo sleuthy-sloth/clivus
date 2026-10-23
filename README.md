@@ -56,7 +56,15 @@ roadmap instead of a guess.
 
 ## What Clivus does today
 
-Real, working, test-backed:
+Real, working, test-backed. The state you get right after opening a folder, with
+nothing loaded:
+
+![Clivus with no study loaded — empty state, then two series loaded: chest CT and head CT with window/level and live fps in the status bar](docs/img/clivus-windows.png)
+
+Left to right above: the empty state that greets you (`Ctrl+O` does the rest),
+then a chest CT and a head CT loaded — series browser on the left, canvas centre,
+and the point of the whole spike in the bottom-right corner: **window 0.42 ms /
+paint 0.45 ms at 58 fps, live, while you drag the window across the image.**
 
 - **Browse a folder like a study.** Point it at DICOM files; get a series list
   with thumbnails, wheel-to-scroll, pan, zoom, and live frame timings in the
@@ -72,6 +80,12 @@ Real, working, test-backed:
 
 The pipeline in one sentence: point it at a folder, click a series, drag the
 window, watch 60 fps.
+
+The daily interactions — window/level drag on a lung-window chest CT, scrolling
+through a head series, zoom-and-pan on vessels, and switching modalities to MR
+with different window defaults:
+
+![Clivus interactions: window/level drag, slice browsing, zoom and pan, multi-series MR selection — each panel with its live timing readout](docs/img/clivus-interactions.png)
 
 ## Fidelity: every supported syntax must prove itself
 
