@@ -704,6 +704,10 @@ void MainWindow::fillReadyThumbnails()
 void MainWindow::pumpSlice()
 {
     if (m_sliceInFlight || m_currentSeries < 0 || m_desiredSlice < 0) return;
+    // Roadmap 3.5: a slice that already failed is not retried on its own — that would spin the
+    // decode pool (pump → fail → pump) on a permanently broken file. The failure is cleared only
+    // when the user picks a slice that previously succeeded, i.e. by moving away first.
+    if (m_failedSlice == m_desiredSlice) return;
     const auto& series = m_series[size_t(m_currentSeries)];
     if (m_desiredSlice >= series.totalFrames() || m_desiredSlice == m_currentSlice) return;
 
@@ -742,7 +746,11 @@ void MainWindow::sliceFinished()
         m_status->setText("This slice could not be decoded — the file may be unsupported or "
                           "damaged. Try another slice or series; the rest of the application "
                           "remains usable.");
-        pumpSlice();
+        // Roadmap 3.5: a failed decode must not retry itself. Only chase a NEW target: re-pumping
+        // the same index would spin the decode pool forever on a permanently broken file, and
+        // pumpSlice() refuses an index the previous attempt failed on (m_failedSlice), so the next
+        // wheel step / slider move / selection change is what restarts it.
+        if (m_desiredSlice != r.index) pumpSlice();
         return;
     }
     // A fast spin leaves the wheel ahead of what is being decoded; painting this one would flash a
@@ -773,18 +781,30 @@ void MainWindow::sliceFinished()
 
 void MainWindow::cancelLoading()
 {
+    // Roadmap 3.5: cancel is a first-class path, not an error. Everything queued is retired in one
+    // move; the one decode/scan currently executing is left to finish and be dropped by the epoch
+    // check in sliceFinished/scanFinished, so no result can land after the user cancelled.
     if (m_scanControl) m_scanControl->cancel = true;
-    if (m_thumbWatcher->isRunning()) m_thumbWatcher->cancel();   // queued thumbnails are dropped
-    setIdleProgress();
-    if (m_scanWatcher->isRunning()) {
-        m_status->setText("Cancelling — the scan stops after the object it is currently reading; you can keep using the application meanwhile.");
+    const bool scanRunning = m_scanWatcher->isRunning();
+    const bool thumbsRunning = m_thumbWatcher->isRunning();
+    if (thumbsRunning) m_thumbWatcher->cancel();
+    setIdleProgress();   // no stuck indicators regardless of which runs unwind below
+
+    if (scanRunning) {
+        m_status->setText(
+            "Cancelling — the scan stops after the object it is currently reading; meanwhile the "
+            "application remains usable, and you can open any other folder.");
         return;
     }
-    if (m_series.empty()) {
-        m_status->setText("Cancelled — nothing was loaded. You can open a folder again at any time.");
+    if (thumbsRunning) {
+        m_status->setText(
+            "Previews cancelled — series remain openable as before; the selected series keeps "
+            "decoding normally.");
+        updateInfo();
         return;
     }
-    updateInfo();
+    // Nothing is in flight: cancel must not lie about work by claiming it stopped any.
+    m_status->setText("Ready");
 }
 
 void MainWindow::setIdleProgress()
@@ -918,6 +938,7 @@ void MainWindow::showSeries(int index)
     }
 
     ++m_epoch;              // a decode still running belongs to the series we are leaving
+    m_failedSlice = -1;     // new series, fresh failure tracking (roadmap 3.5)
     m_currentSeries = index;
     m_currentSlice = -1;    // nothing decoded for this series yet
     m_timing.clear();

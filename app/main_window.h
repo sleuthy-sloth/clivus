@@ -126,6 +126,7 @@ private:
     QFutureWatcher<SliceResult>* m_sliceWatcher = nullptr;
     quint64 m_epoch = 0;       // bumped when the on-screen series changes; stale decodes are dropped
     int m_desiredSlice = -1;   // where the wheel wants to be; decodes catch up to it one at a time
+    int m_failedSlice = -1;    // last slice a decode failed on: pumpSlice() refuses to auto-retry it
     bool m_sliceInFlight = false;
     int m_benchFrames = 0;     // pending --bench request, honoured once the first slice is on screen
     int m_benchRow = 0;
