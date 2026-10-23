@@ -74,7 +74,7 @@ static double maxMeanDeviation(const std::vector<uint8_t>& a, const std::vector<
 }
 
 int main(int argc, char** argv) {
-    const char* folder = nullptr;
+    std::string folder;
     std::string refPath;
     int threshold = 0; // byte deviation
 
@@ -82,14 +82,14 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "--threshold" && i + 1 < argc) {
             threshold = std::atoi(argv[++i]);
-        } else if (!folder) {
+        } else if (folder.empty()) {
             folder = a;
         } else {
             refPath = a;
         }
     }
 
-    if (!folder) {
+    if (folder.empty()) {
         std::cerr << "usage: parity <dicom-folder> [--threshold N]\n";
         return 2;
     }
