@@ -20,6 +20,14 @@ namespace {
 
 int failures = 0;
 
+#define CHECK(cond)                                                          \
+    do {                                                                     \
+        if (!(cond)) {                                                       \
+            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);      \
+            ++failures;                                                      \
+        }                                                                    \
+    } while (false)
+
 void expect(bool ok, const char* what)
 {
     if (!ok) {
@@ -65,6 +73,117 @@ int main()
 
     const fs::path dir = fs::temp_directory_path() / "clivus_photometric_test";
     std::error_code ec;
+
+// ---- PALETTE COLOR: stored indexes map through the file's own RGB LUTs (C.7.9). Values that
+// exceed the table clamp to its last entry; specific indices produce exactly the colours the
+// tables define.
+{
+    const fs::path paletteDir = dir / "palette";
+    fs::create_directories(paletteDir);
+    DcmFileFormat ff;
+    DcmDataset* ds = ff.getDataset();
+    ds->putAndInsertString(DCM_SOPClassUID, UID_SecondaryCaptureImageStorage);
+    ds->putAndInsertString(DCM_SOPInstanceUID, "1.2.826.0.1.3680043.8.1055.9.2");
+    ds->putAndInsertString(DCM_StudyInstanceUID, "1.2.826.0.1.3680043.8.1055.9");
+    ds->putAndInsertString(DCM_SeriesInstanceUID, "1.2.826.0.1.3680043.8.1055.9");
+    ds->putAndInsertString(DCM_Modality, "OT");
+    ds->putAndInsertString(DCM_PatientName, "Palette^Test");
+    ds->putAndInsertString(DCM_PhotometricInterpretation, "PALETTE COLOR");
+    ds->putAndInsertUint16(DCM_SamplesPerPixel, 1);
+    ds->putAndInsertUint16(DCM_Rows, 1);
+    ds->putAndInsertUint16(DCM_Columns, 4);
+    ds->putAndInsertUint16(DCM_BitsAllocated, 8);
+    ds->putAndInsertUint16(DCM_BitsStored, 8);
+    ds->putAndInsertUint16(DCM_HighBit, 7);
+    ds->putAndInsertUint16(DCM_PixelRepresentation, 0);
+    // Indexes 0..3; the tables have exactly 3 entries, so index 3 must clamp to entry 2.
+    // 8-bit object: the pixel data must be BYTES (a Uint16 array would interleave the low bytes
+    // and the indexes the loader reads would not be the ones written).
+    const Uint8 palettePixels[4] = {0, 1, 2, 3};
+    ds->putAndInsertUint8Array(DCM_PixelData, palettePixels, 4);
+    const Uint16 desc[3] = {3, 0, 8};   // 3 entries, first mapped index 0, 8-bit entries
+    const Uint16 red[3] = {1, 2, 3}, green[3] = {10, 20, 30}, blue[3] = {100, 0, 0};
+    ds->putAndInsertUint16Array(DCM_RedPaletteColorLookupTableDescriptor, desc, 3);
+    ds->putAndInsertUint16Array(DCM_GreenPaletteColorLookupTableDescriptor, desc, 3);
+    ds->putAndInsertUint16Array(DCM_BluePaletteColorLookupTableDescriptor, desc, 3);
+    ds->putAndInsertUint16Array(DCM_RedPaletteColorLookupTableData, red, 3);
+    ds->putAndInsertUint16Array(DCM_GreenPaletteColorLookupTableData, green, 3);
+    ds->putAndInsertUint16Array(DCM_BluePaletteColorLookupTableData, blue, 3);
+    DcmMetaInfo* meta = ff.getMetaInfo();
+    meta->putAndInsertString(DCM_TransferSyntaxUID, UID_LittleEndianExplicitTransferSyntax);
+    const fs::path paletteFile = paletteDir / "palette.dcm";
+    CHECK(ff.saveFile(paletteFile.string().c_str(), EXS_LittleEndianExplicit).good());
+
+    clivus::ImageFrame frame;
+    CHECK(clivus::loadFrame(paletteFile.string(), frame));
+    expect(frame.isColour(), "PALETTE COLOR decodes as colour");
+    const float* px = frame.pixels.data();
+    expect(px[0] == 1 && px[1] == 10 && px[2] == 100,
+           "palette index 0 maps to the tables' first RGB entry");
+    expect(px[3] == 2 && px[4] == 20 && px[5] == 0,
+           "palette index 1 maps to the tables' second RGB entry");
+    expect(px[6] == 3 && px[7] == 30 && px[8] == 0,
+           "palette index 2 maps to the tables' third RGB entry");
+    expect(px[9] == 3 && px[10] == 30 && px[11] == 0,
+           "palette index beyond the table clamps to the last entry");
+}
+
+// ---- Non-linear Modality LUT (C.11.2.1.3): a Modality LUT Sequence replaces slope/intercept;
+// stored values map through the LUT, and min/max/window numbers describe post-LUT values.
+{
+    const fs::path lutDir = dir / "modalitylut";
+    fs::create_directories(lutDir);
+    DcmFileFormat ff;
+    DcmDataset* ds = ff.getDataset();
+    ds->putAndInsertString(DCM_SOPClassUID, UID_SecondaryCaptureImageStorage);
+    ds->putAndInsertString(DCM_SOPInstanceUID, "1.2.826.0.1.3680043.8.1055.9.3");
+    ds->putAndInsertString(DCM_StudyInstanceUID, "1.2.826.0.1.3680043.8.1055.9");
+    ds->putAndInsertString(DCM_SeriesInstanceUID, "1.2.826.0.1.3680043.8.1055.9");
+    ds->putAndInsertString(DCM_Modality, "OT");
+    ds->putAndInsertString(DCM_PatientName, "LUT^Test");
+    ds->putAndInsertString(DCM_PhotometricInterpretation, "MONOCHROME2");
+    ds->putAndInsertUint16(DCM_SamplesPerPixel, 1);
+    ds->putAndInsertUint16(DCM_Rows, 1);
+    ds->putAndInsertUint16(DCM_Columns, 4);
+    ds->putAndInsertUint16(DCM_BitsAllocated, 8);
+    ds->putAndInsertUint16(DCM_BitsStored, 8);
+    ds->putAndInsertUint16(DCM_HighBit, 7);
+    ds->putAndInsertUint16(DCM_PixelRepresentation, 0);
+    const Uint8 lutPixels[4] = {0, 1, 2, 3};
+    ds->putAndInsertUint8Array(DCM_PixelData, lutPixels, 4);
+
+    // A non-linear LUT: entries at 0..3 map 0→10, 1→50, 2→100, and values beyond the table
+    // clamp to 100. Descriptor: 4 entries, first mapped value 0, 16-bit entries.
+    const Uint16 lutDesc[3] = {4, 0, 16};
+    const Uint16 lutData[4] = {10, 50, 100, 150};
+    DcmSequenceOfItems* sq = new DcmSequenceOfItems(DCM_ModalityLUTSequence);
+    DcmItem* lutItem = new DcmItem();
+    lutItem->putAndInsertUint16Array(DCM_LUTDescriptor, lutDesc, 3);
+    lutItem->putAndInsertUint16Array(DCM_LUTData, lutData, 4);
+    sq->insert(lutItem);
+    ds->insert(sq);
+
+    DcmMetaInfo* meta = ff.getMetaInfo();
+    meta->putAndInsertString(DCM_TransferSyntaxUID, UID_LittleEndianExplicitTransferSyntax);
+    const fs::path lutFile = lutDir / "lut.dcm";
+    CHECK(ff.saveFile(lutFile.string().c_str(), EXS_LittleEndianExplicit).good());
+
+    clivus::ImageFrame frame;
+    CHECK(clivus::loadFrame(lutFile.string(), frame));
+    expect(!frame.isColour(), "a non-linear Modality LUT frame stays greyscale");
+    const float* px = frame.pixels.data();
+    expect(px[0] == 10 && px[1] == 50 && px[2] == 100 && px[3] == 150,
+           "Modality LUT Sequence maps the stored values through the table");
+    expect(frame.minValue == 10 && frame.maxValue == 150,
+           "min/max describe the post-LUT values, not the raw stored range");
+    double c = 0, w = 0;
+    frame.fullWindow(c, w);
+    std::vector<uint8_t> shown(4);
+    frame.render(shown.data(), c, w);
+    expect(shown[0] == 0 && shown[3] == 255, "MONOCHROME2 window: low value dark, high value bright");
+    fs::remove_all(lutDir, ec);
+}
+
     fs::remove_all(dir, ec);
     fs::create_directories(dir, ec);
 

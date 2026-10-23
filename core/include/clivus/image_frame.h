@@ -9,12 +9,14 @@ namespace clivus {
 //
 // Transforms, what is applied and what is not (PS3.3 C.11):
 //
-//   MODALITY LUT — applied in the IDENTITY and linear (RescaleSlope/RescaleIntercept) shapes only.
-//   An object whose Modality LUT is a LUT Sequence (non-linear) gets no modality transform at all:
-//   its pixels are stored values, and the range/window numbers say so. DCMTK would have applied the
-//   sequence for us, but deliberately disabled (CIF_IgnoreModalityTransformation) so the loader
-//   stays in charge of the arithmetic and the window numbers match what the values are. Dose
-//   objects carry no rescale tags; their multiplier is DoseGridScaling, applied the same way.
+//   MODALITY LUT — applied in every shape it exists in: IDENTITY, linear (RescaleSlope /
+//   RescaleIntercept), and non-linear (a Modality LUT Sequence, C.11.2.1.3 — the lookup runs in
+//   loadFrame() before makeFrame, so pixels, min/max and window numbers are all in post-LUT
+//   modality units). DCMTK could apply it, but it is deliberately disabled
+//   (CIF_IgnoreModalityTransformation) so the loader stays in charge of the arithmetic and the
+//   window numbers match what the values are. Dose objects carry no rescale tags; their
+//   multiplier is DoseGridScaling, applied the same way. PALETTE COLOR (C.7.9) maps through the
+//   file's own RGB LUTs at decode time, so palette frames arrive as display RGB.
 //
 //   VOI LUT — not read from the file. The default window is the full stored range ("full dynamic",
 //   as Horos calls it) and the user moves it from there; a Window Center/Width in the file is not

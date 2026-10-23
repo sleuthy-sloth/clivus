@@ -9,6 +9,7 @@
 #include <dcmtk/dcmimgle/dimopx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -247,6 +248,86 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
 
     // Colour first, because it needs a different DCMTK accessor than greyscale.
     //
+    // PALETTE COLOR: SamplesPerPixel is 1 but the stored values are INDICES into per-channel LUTs
+    // the file carries (PS3.3 C.7.9). DCMTK tolerates palette objects but its DicomImage palette
+    // support is too partial to trust, so the mapping is done here instead: indexes come out of
+    // the mono pixel data path (they are ordinary 8/16-bit values), and each channel's LUT
+    // (descriptor + data, read as Uint16 whatever VR the writer chose) turns them into display
+    // RGB. Output is exactly the values the file's tables define — no scaling, no window.
+    {
+        OFString pi;
+        if (ds->findAndGetOFStringArray(DCM_PhotometricInterpretation, pi).good() &&
+            pi == "PALETTE COLOR") {
+            // The indexes are the object's own pixel bytes (after chooseRepresentation the data
+            // is uncompressed explicit-LE whatever the file shipped), so read them straight from
+            // the dataset rather than through DicomImage: getInterData() on a palette object is
+            // representation-dependent and not trustworthy here.
+            Uint16 bitsAllocated = 8;
+            (void)ds->findAndGetUint16(DCM_BitsAllocated, bitsAllocated);
+            DcmElement* pd = nullptr;
+            ds->findAndGetElement(DCM_PixelData, pd);
+            if (!pd) return false;
+            std::vector<float> index;
+            index.reserve(perFrame);
+            if (bitsAllocated <= 8) {
+                Uint8* raw8 = nullptr;
+                if (pd->getUint8Array(raw8).bad() || !raw8) return false;
+                const size_t n = size_t(pd->getLength());
+                const size_t base = size_t(want) * perFrame;
+                if (n < base + perFrame) return false;
+                for (size_t i = 0; i < perFrame; ++i) index.push_back(float(raw8[base + i]));
+            } else {
+                Uint16* raw16 = nullptr;
+                if (pd->getUint16Array(raw16).bad() || !raw16) return false;
+                const size_t n = size_t(pd->getLength()) / 2;
+                const size_t base = size_t(want) * perFrame;
+                if (n < base + perFrame) return false;
+                for (size_t i = 0; i < perFrame; ++i) index.push_back(float(raw16[base + i]));
+            }
+            struct Lut { const DcmTagKey desc, data; };
+            static const Lut luts[3] = {
+                {DCM_RedPaletteColorLookupTableDescriptor,
+                 DCM_RedPaletteColorLookupTableData},
+                {DCM_GreenPaletteColorLookupTableDescriptor,
+                 DCM_GreenPaletteColorLookupTableData},
+                {DCM_BluePaletteColorLookupTableDescriptor,
+                 DCM_BluePaletteColorLookupTableData},
+            };
+            std::vector<float> rgb(index.size() * 3, 0.0f);
+            for (int c = 0; c < 3; ++c) {
+                const Uint16* desc = nullptr;
+                unsigned long descCount = 0;
+                if (ds->findAndGetUint16Array(luts[c].desc, desc, &descCount).bad() ||
+                    !desc || descCount < 2)
+                    return false;
+                const unsigned long entries = desc[0];
+                const unsigned long first = desc[1];
+                if (entries == 0) return false;
+                const Uint16* data = nullptr;
+                unsigned long dataCount = 0;
+                if (ds->findAndGetUint16Array(luts[c].data, data, &dataCount).bad() ||
+                    !data)
+                    return false;
+                const unsigned long usable = std::min(dataCount, entries);
+                const unsigned long bits = descCount > 2 ? desc[2] : 16;
+                for (size_t i = 0; i < index.size(); ++i) {
+                    long idx = std::lroundf(index[i]) - long(first);
+                    const long last = long(usable) - 1;
+                    idx = std::clamp(idx, 0L, last);
+                    float value = float(data[size_t(idx)]);
+                    // 8-bit entries hold 0..255 directly; 16-bit tables scale to display units so
+                    // the canvas gets the same 0..255 range either way.
+                    if (bits >= 16) value = std::min(value, 255.0f);
+                    rgb[i * 3 + size_t(c)] = value;
+                }
+            }
+            out = makeColourFrame(std::move(rgb), int(img.getWidth()), int(img.getHeight()));
+            out.frameIndex = int(want);
+            out.frameCount = int(frames);
+            return out.valid();
+        }
+    }
+
     // getOutputData() is the one call that returns interleaved 8-bit RGB whatever the file holds:
     // DCMTK converts from RGB, YBR_FULL, YBR_FULL_422 / YBR_PARTIAL_422 (including the subsampling
     // those imply) and honours PlanarConfiguration for us, and scales 16-bit samples down to 8. That
@@ -292,6 +373,8 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
     Float64 v = 0;
     if (ds->findAndGetFloat64(DCM_RescaleSlope, v).good()) slope = float(v);
     if (ds->findAndGetFloat64(DCM_RescaleIntercept, v).good()) intercept = float(v);
+
+
     if (!ds->tagExistsWithValue(DCM_RescaleSlope)) {
         // RT Dose carries no rescale tags: the modality transform is DoseGridScaling alone, a
         // multiplier from stored values to Gy. anyVRString because the corpus object (and real RT
@@ -330,6 +413,51 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
         OFString pi;
         if (ds->findAndGetOFStringArray(DCM_PhotometricInterpretation, pi).good())
             invert = (pi == "MONOCHROME1");
+    }
+
+    // Non-linear Modality LUT (PS3.3 C.11.2.1.3): a Modality LUT Sequence with LUT Descriptor +
+    // LUT Data. When it is present the standard forbids Rescale tags, and the transform is a
+    // lookup, not the linear slope/intercept: stored value x maps to LUTData[clamp(x - first)].
+    // The LUT is applied HERE, before makeFrame, so pixels/min/max/window numbers are all in
+    // post-LUT modality units and the window maths stays exactly the C.11.2.1.2 formula it already
+    // is. (Linear objects skip this branch entirely: their numbers keep using slope/intercept.)
+    if (ds->tagExistsWithValue(DCM_ModalityLUTSequence)) {
+        DcmSequenceOfItems* sq = nullptr;
+        if (ds->findAndGetSequence(DCM_ModalityLUTSequence, sq).bad() || !sq ||
+            sq->card() < 1)
+            return false;
+        DcmItem* item = sq->getItem(0);
+        if (!item) return false;
+
+        const Uint16* desc = nullptr;
+        unsigned long descCount = 0;
+        if (item->findAndGetUint16Array(DCM_LUTDescriptor, desc, &descCount).bad() || !desc ||
+            descCount < 2)
+            return false;
+        // Descriptor order (C.11.2.5.1): number of entries, first mapped value, bits per entry.
+        // DCMTK writes the first two always; the bits field is optional (default 16).
+        const unsigned long entries = desc[0];
+        const unsigned long first = desc[1];
+        if (entries == 0) return false;
+        const Uint16* data = nullptr;
+        unsigned long dataCount = 0;
+        if (item->findAndGetUint16Array(DCM_LUTData, data, &dataCount).bad() || !data ||
+            dataCount == 0)
+            return false;
+        const unsigned long usable = std::min(dataCount, entries);
+        for (size_t i = 0; i < raw.size(); ++i) {
+            long idx = std::lroundf(raw[i]) - long(first);
+            idx = std::clamp(idx, 0L, long(usable) - 1);
+            raw[i] = float(data[size_t(idx)]);
+        }
+        // Padding is expressed in STORED units and must still be filtered after the value has
+        // been mapped, so the padding marker is mapped through the LUT too.
+        if (hasPadding) {
+            long padIdx = std::lroundf(paddingValue) - long(first);
+            paddingValue = float(data[size_t(std::clamp(padIdx, 0L, long(usable) - 1))]);
+        }
+        slope = 1.0f;
+        intercept = 0.0f;   // the LUT already did the work
     }
 
     out = makeFrame(std::move(raw), int(img.getWidth()), int(img.getHeight()),
