@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "main_window.h"
 
+#include "about_dialog.h"
+#include "branding.h"
+
 #include "clivus/version.h"
 
 #include <QAction>
@@ -397,15 +400,20 @@ MainWindow::MainWindow(QWidget* parent)
     m_emptyState = new QWidget(this);
     auto* emptyLayout = new QVBoxLayout(m_emptyState);
     emptyLayout->addStretch(1);
-    auto* welcome = new QLabel("Welcome to Clivus", m_emptyState);
-    welcome->setAlignment(Qt::AlignCenter);
-    QFont heading = welcome->font();
-    heading.setPointSizeF(heading.pointSizeF() * 1.8);
-    heading.setBold(true);
-    welcome->setFont(heading);
+    // Branded welcome: the mark (or the built-in wordmark fallback), then one honest line about
+    // what the app is for, then the single obvious way in. The logo is an asset swap-point —
+    // see branding.h; nothing here needs touching when the artwork lands.
+    emptyLayout->addWidget(clivus::branding::makeBrandHeader(132, m_emptyState), 0,
+                           Qt::AlignHCenter);
+    auto* tagline = new QLabel(QStringLiteral("DICOM viewing for research and education"),
+                               m_emptyState);
+    tagline->setAlignment(Qt::AlignCenter);
+    tagline->setStyleSheet(QStringLiteral("color:#8a94a0;"));
+    emptyLayout->addWidget(tagline);
     auto* blurb = new QLabel(
-        "Clivus views DICOM medical image folders: scan a folder, browse its series, and examine "
-        "each slice. Intended for research and educational use.", m_emptyState);
+        "Open a folder of DICOM files to scan it: browse its series on the left, and examine each "
+        "slice on the right — window/level, zoom, measurements and multiplanar views included. "
+        "You can also drop a folder anywhere on this window.", m_emptyState);
     blurb->setAlignment(Qt::AlignCenter);
     blurb->setWordWrap(true);
     auto* openButton = new QPushButton("Open Folder…", m_emptyState);
@@ -417,7 +425,6 @@ MainWindow::MainWindow(QWidget* parent)
         m_emptyState);
     manualLink->setAlignment(Qt::AlignCenter);
     connect(manualLink, &QLabel::linkActivated, this, [this] { showManual(); });
-    emptyLayout->addWidget(welcome);
     emptyLayout->addSpacing(clivus::style::kSpacing);
     emptyLayout->addWidget(blurb);
     emptyLayout->addSpacing(clivus::style::kSpacing);
@@ -1236,19 +1243,8 @@ void MainWindow::showManual()
 
 void MainWindow::showAbout()
 {
-    QMessageBox::about(this, "About Clivus",
-        QString("<b>Clivus %1</b><br><br>"
-                "A DICOM viewer.<br><br>"
-                "This program is free software: you can redistribute it and/or modify it under "
-                "the terms of the GNU General Public License as published by the Free Software "
-                "Foundation, either version 3 of the License, or (at your option) any later "
-                "version. This program is distributed in the hope that it will be useful, but "
-                "WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or "
-                "FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more "
-                "details.<br><br>"
-                "Clivus is intended for <b>research and educational use</b>. It is not a "
-                "substitute for a clinically validated diagnostic workstation, and its output "
-                "should not be relied upon for clinical decisions without appropriate "
-                "independent validation.")
-            .arg(QString::fromLatin1(CLIVUS_VERSION)));
+    // A proper identity home (branding): mark, version, repository, licence, acknowledgments and
+    // the research-use disclaimer in one calm panel instead of a wall of modal text.
+    AboutDialog dialog(this);
+    dialog.exec();
 }
