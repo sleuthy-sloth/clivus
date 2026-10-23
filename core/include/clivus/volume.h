@@ -22,6 +22,9 @@ struct Volume {
     // Slice orientation vectors (from first slice that has geometry)
     double orientRowX = 1.0, orientRowY = 0.0, orientRowZ = 0.0;  // row direction (patient space)
     double orientColX = 0.0, orientColY = 1.0, orientColZ = 0.0;  // column direction (patient space)
+    // Slice normal (cross of row/column cosines), patient space, from the first slice that has
+    // geometry. Unit length when hasGeometry; (0,0,1) placeholder otherwise.
+    double normalX = 0.0, normalY = 0.0, normalZ = 1.0;
     // True when origin and orientation are populated from DICOM geometry
     bool hasGeometry = false;
 
@@ -38,5 +41,23 @@ struct Volume {
 
 // Decodes every slice of the series. Fails when the slices disagree on size or none decode.
 bool loadVolume(const SeriesInfo& series, Volume& out);
+
+// Whether the series carries usable per-slice geometry for MPR: every object reported
+// ImagePositionPatient and ImageOrientationPatient. MPR entry points must disable themselves when
+// this is false rather than render something that quietly lies about position.
+bool hasUsableGeometry(const SeriesInfo& series);
+
+// Which plane to reslice. AXIAL = the volume as scanned (rows/cols per slice), CORONAL =
+// columns x depth, SAGITTAL = depth x rows. All through the series' own orientation vectors, so
+// the three planes stay faithful to the geometry the scanner wrote.
+enum class MprAxis { Axial, Coronal, Sagittal };
+
+// Nearest-neighbour reslice of the volume at the given plane position (slice index for CORONAL and
+// SAGITTAL, ignored for AXIAL where position is the whole stack). Returns a display-ready frame:
+// width/height from the plane's extents, pixels in modality units, and the volume's min/max kept
+// for windowing. Nearest-neighbour by choice for the first round: it invents nothing (a trilinear
+// interpolated slice would blend tissue across slices), and the honest note in the overlay says
+// what it is. Fails when the volume is invalid or the position is out of range.
+bool resliceVolume(const Volume& volume, MprAxis axis, int position, ImageFrame& out);
 
 }  // namespace clivus

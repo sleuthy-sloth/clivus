@@ -175,6 +175,9 @@ bool loadVolume(const SeriesInfo& series, Volume& out)
         vol.orientColX = firstCol[0];
         vol.orientColY = firstCol[1];
         vol.orientColZ = firstCol[2];
+        const Vec3 n = cross(firstRow, firstCol);
+        const double len = std::sqrt(dot(n, n));
+        if (len > 1e-9) { vol.normalX = n[0] / len; vol.normalY = n[1] / len; vol.normalZ = n[2] / len; }
         vol.hasGeometry = true;
     }
     
@@ -182,4 +185,66 @@ bool loadVolume(const SeriesInfo& series, Volume& out)
     return true;
 }
 
+bool hasUsableGeometry(const SeriesInfo& series)
+{
+    if (series.files.empty()) return false;
+    const size_t n = std::min(series.sliceGeometry.size(), series.files.size());
+    if (n < series.files.size()) return false;   // geometry must parallel the file list
+    for (size_t i = 0; i < n; ++i)
+        if (!series.sliceGeometry[i].hasGeometry) return false;
+    return true;
+}
+
+bool resliceVolume(const Volume& volume, const MprAxis axis, const int position, ImageFrame& out)
+{
+    if (!volume.valid()) return false;
+    ImageFrame f;
+    switch (axis) {
+    case MprAxis::Axial: {
+        // The stack as scanned: every slice is already a display frame of slices; emit the slice
+        // at `position` (same convention the slice browser uses). 0/1-fails lie with the caller.
+        if (position < 0 || position >= volume.depth) return false;
+        f.width = volume.width;
+        f.height = volume.height;
+        f.channels = 1;
+        f.pixels.resize(size_t(f.width) * size_t(f.height));
+        for (int y = 0; y < f.height; ++y)
+            for (int x = 0; x < f.width; ++x)
+                f.pixels[size_t(y) * size_t(f.width) + size_t(x)] = volume.at(x, y, position);
+        break;
+    }
+    case MprAxis::Coronal: {
+        // Fixed row `position`, sweep columns and depth. Width = columns, height = slices.
+        if (position < 0 || position >= volume.height) return false;
+        f.width = volume.width;
+        f.height = volume.depth;
+        f.channels = 1;
+        f.pixels.resize(size_t(f.width) * size_t(f.height));
+        for (int z = 0; z < volume.depth; ++z)
+            for (int x = 0; x < f.width; ++x)
+                f.pixels[size_t(z) * size_t(f.width) + size_t(x)] =
+                    volume.at(x, position, z);
+        break;
+    }
+    case MprAxis::Sagittal: {
+        // Fixed column `position`, sweep rows and depth. Width = slices, height = rows.
+        if (position < 0 || position >= volume.width) return false;
+        f.width = volume.depth;
+        f.height = volume.height;
+        f.channels = 1;
+        f.pixels.resize(size_t(f.width) * size_t(f.height));
+        for (int y = 0; y < f.height; ++y)
+            for (int z = 0; z < volume.depth; ++z)
+                f.pixels[size_t(y) * size_t(f.width) + size_t(z)] =
+                    volume.at(position, y, z);
+        break;
+    }
+    }
+    f.minValue = volume.minValue;
+    f.maxValue = volume.maxValue;
+    out = std::move(f);
+    return out.valid();
+}
+
 }  // namespace clivus
+

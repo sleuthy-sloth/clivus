@@ -83,7 +83,46 @@ int main(int argc, char** argv)
     std::array<double, 6> iopZero = {0, 0, 0, 0, 0, 0};
     assert(clivus::orientationLabel(iopZero) == "");
 
-    std::printf("volume: all checks passed (4 slices, spacing %.1f/%.1f/%.1f mm, geometric order)\n",
+    // MPR reslice + geometry query
+    {
+        clivus::SeriesInfo probe;
+        // A series with no geometry at all: MPR must refuse (the fields are parallel-but-absent).
+        probe.files = {"a.dcm", "b.dcm"};
+        assert(!clivus::hasUsableGeometry(probe));
+    }
+
+    // hasUsableGeometry on the real series: the fixture's slices carry IPP/IOP.
+    assert(clivus::hasUsableGeometry(series));
+
+    clivus::ImageFrame axial, coronal, sagittal;
+    assert(clivus::resliceVolume(vol, clivus::MprAxis::Axial, 2, axial));
+    assert(axial.width == vol.width && axial.height == vol.height);
+    // The axial plane at z=2 holds the slice z=2, whose fill value is 2.
+    assert(axial.pixels.front() == 2.0f && axial.pixels.back() == 2.0f);
+    assert(axial.minValue == 0.0f && axial.maxValue == 3.0f);
+
+    assert(clivus::resliceVolume(vol, clivus::MprAxis::Coronal, 1, coronal));
+    // Fixed row 1: width = columns, height = slices; every x along the row reads the per-slice
+    // fill: at depth z the value is z regardless of x.
+    assert(coronal.width == vol.width && coronal.height == vol.depth);
+    for (int d = 0; d < coronal.height; ++d)
+        for (int x = 0; x < coronal.width; ++x)
+            assert(coronal.pixels[size_t(d) * size_t(coronal.width) + size_t(x)] == float(d));
+
+    assert(clivus::resliceVolume(vol, clivus::MprAxis::Sagittal, 0, sagittal));
+    // Fixed column 0: width = slices, height = rows; value at row/depth = the depth's fill.
+    assert(sagittal.width == vol.depth && sagittal.height == vol.height);
+    for (int y = 0; y < sagittal.height; ++y)
+        for (int d = 0; d < sagittal.width; ++d)
+            assert(sagittal.pixels[size_t(y) * size_t(sagittal.width) + size_t(d)] == float(d));
+
+    // Out of range positions fail cleanly.
+    assert(!clivus::resliceVolume(vol, clivus::MprAxis::Axial, 99, axial));
+    assert(!clivus::resliceVolume(vol, clivus::MprAxis::Coronal, 99, coronal));
+    assert(!clivus::resliceVolume(vol, clivus::MprAxis::Sagittal, 99, sagittal));
+
+    std::printf("volume: all checks passed (4 slices, spacing %.1f/%.1f/%.1f mm, geometric order; "
+                "MPR reslice axial/coronal/sagittal verified)\n",
                 vol.spacingX, vol.spacingY, vol.spacingZ);
     return 0;
 }
