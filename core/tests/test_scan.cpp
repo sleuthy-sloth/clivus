@@ -130,6 +130,42 @@ int main(int argc, char** argv)
         expect(sawSingle, "the corpus has a single-frame object to compare against");
     }
 
+    {   // A bad subfolder (permission-denied) must not end the walk: files after it still index.
+        // Recursion-critical for radiology folders that carry protected seriesdirectories next to
+        // readable ones; the walk's old break-on-first-error dropped everything downstream.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_denied";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        fs::copy_file(fs::path(corpus) / "CT_small.dcm", dir / "root.dcm",
+                      fs::copy_options::overwrite_existing, ec);
+        // Three denied subfolders so the walk meets one early in its order whatever the filesystem
+        // sorts first.
+        for (const fs::path denied : {dir / "01-denied", dir / "02-denied", dir / "03-denied"}) {
+            fs::create_directories(denied, ec);
+            fs::permissions(denied, fs::perms::none, ec);
+        }
+        const fs::path okDir = dir / "zz-ok";
+        fs::create_directories(okDir, ec);
+        fs::copy_file(fs::path(corpus) / "MR_small.dcm", okDir / "MR_small.dcm",
+                      fs::copy_options::overwrite_existing, ec);
+
+        const auto series = clivus::scanDirectory(dir.string());
+        bool sawRoot = false, sawNested = false;
+        for (const auto& s : series) {
+            for (const std::string& f : s.files) {
+                if (f.find("root.dcm") != std::string::npos) sawRoot = true;
+                if (f.find("zz-ok") != std::string::npos) sawNested = true;
+            }
+        }
+        expect(sawRoot, "the walk still indexes files at the top level");
+        expect(sawNested, "files after a permission-denied subfolder are still indexed");
+        for (const fs::path denied : {dir / "01-denied", dir / "02-denied", dir / "03-denied"}) {
+            fs::permissions(denied, fs::perms::owner_all, ec);
+        }
+        fs::remove_all(dir, ec);
+    }
+
     if (failures == 0) std::printf("scan: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }

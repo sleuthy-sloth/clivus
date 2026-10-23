@@ -201,19 +201,22 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
     fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
     if (ec) return {};
 
-    for (; it != fs::recursive_directory_iterator(); it.increment(ec)) {
-        if (ec) break;
+    // Per-entry errors (a denied subfolder, a file that vanished mid-walk, an unreadable junction)
+    // must not end the whole walk: quietly skipping the bad entry and continuing is what the scan
+    // promise means. Breaking on the first error walked only the entries before it — on Windows
+    // that read as "subfolders are never scanned" when one bad directory sat early in the order.
+    // (A walk that still errors on increment after a pop is exhausted by the iterator, not us.)
+    for (; it != fs::recursive_directory_iterator();) {
         if (control) {
             control->examined.fetch_add(1, std::memory_order_relaxed);
             // Checked per entry: the walk is the slow part of a big folder, and one header parse is
             // short enough that stopping between entries is all the responsiveness anyone needs.
             if (control->cancel.load(std::memory_order_relaxed)) return {};
         }
-        if (!it->is_regular_file(ec)) continue;
+        if (!it->is_regular_file(ec)) { it.increment(ec); continue; }
         const fs::path p = it->path();
-
         auto header = loadHeader(p.string());
-        if (!header) continue;
+        if (!header) { it.increment(ec); continue; }
         DcmDataset* ds = header->getDataset();
 
         SeriesInfo s;
@@ -221,7 +224,7 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         // and Patient Name as VR=UN, and the escaped string the getter hands back would group it under
         // a mangled UID and show it with a blank modality.
         s.seriesUid = anyVRString(ds, DCM_SeriesInstanceUID);
-        if (s.seriesUid.empty()) continue;
+        if (s.seriesUid.empty()) { it.increment(ec); continue; }
         s.studyUid = anyVRString(ds, DCM_StudyInstanceUID);
         s.modality = anyVRString(ds, DCM_Modality);
         s.patientName = anyVRString(ds, DCM_PatientName);
@@ -241,6 +244,7 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         
         known.files.push_back(p.string());
         sortKeys[s.seriesUid].push_back(Entry{instanceNumber(ds), p.string(), frameCountOf(ds), geom});
+        it.increment(ec);
     }
 
     std::vector<SeriesInfo> out;

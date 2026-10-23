@@ -177,10 +177,13 @@ void CanvasWidget::paintGL()
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glColor3f(1.0f, 1.0f, 1.0f);
     glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 1.0f); glVertex2d(x0, y0);              // texture row 0 is t=1
-    glTexCoord2f(1.0f, 1.0f); glVertex2d(x0 + w, y0);
-    glTexCoord2f(1.0f, 0.0f); glVertex2d(x0 + w, y0 + h);
-    glTexCoord2f(0.0f, 0.0f); glVertex2d(x0, y0 + h);
+    // Texture upload puts data row 0 at t=0 (no GL_UNPACK_FLIP_Y), so the screen's top edge must
+    // sample t=0: image row 0 stays the top row. Swapping these two put every image bottom-up —
+    // a coronal head rendered with the sinuses down (bug report, v0.1.2).
+    glTexCoord2f(0.0f, 0.0f); glVertex2d(x0, y0);              // screen top = image row 0
+    glTexCoord2f(1.0f, 0.0f); glVertex2d(x0 + w, y0);
+    glTexCoord2f(1.0f, 1.0f); glVertex2d(x0 + w, y0 + h);
+    glTexCoord2f(0.0f, 1.0f); glVertex2d(x0, y0 + h);
     glEnd();
     glDisable(GL_TEXTURE_2D);
 
