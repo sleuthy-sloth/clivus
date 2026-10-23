@@ -82,12 +82,20 @@ QString seriesDetails(const clivus::SeriesInfo& s)
     // Frames only when they say something the object count does not: a 15-frame RT Dose is one
     // object and fifteen slices, and the list should not pretend otherwise.
     const int frames = s.totalFrames();
+    const auto plural = [](size_t n, const char* one, const char* many) {
+        return QString::fromUtf8(n == 1 ? one : many);
+    };
     if (frames > int(s.files.size()))
-        parts << QString("%1 objects · %2 frames").arg(s.files.size()).arg(frames);
+        parts << QString("%1 · %2 frames")
+                     .arg(plural(s.files.size(), "1 object", "%1 objects").arg(s.files.size()))
+                     .arg(frames);
     else
-        parts << QString("%1 images").arg(s.files.size());
+        parts << plural(s.files.size(), "1 image", "%1 images").arg(s.files.size());
     if (s.width > 0 && s.height > 0) parts << QString("%1 × %2").arg(s.width).arg(s.height);
-    return parts.join(QLatin1String(" · "));
+    // QStringLiteral, not QLatin1String: the separator is a U+00B7 middle dot carried as UTF-8,
+    // and QLatin1String reinterprets its bytes as Latin-1, painting "Â·" in every series row on
+    // every platform (caught by the real macOS screenshot, invisible in the Pi's offscreen tests).
+    return parts.join(QStringLiteral(" · "));
 }
 
 QString seriesLabel(const clivus::SeriesInfo& s)

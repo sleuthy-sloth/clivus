@@ -83,6 +83,15 @@ int main(int argc, char** argv)
             // runner with a window server) — on a headless box the canvas stays blank and the
             // grab says so instead of pretending.
             window.openFolder(args.first());
+            // The scan is asynchronous: wait for the series list to exist before choosing one.
+            {
+                QElapsedTimer scanClock;
+                scanClock.start();
+                while (!window.hasSeriesForCapture() && scanClock.elapsed() < 20000) {
+                    QApplication::processEvents(QEventLoop::AllEvents, 100);
+                    QThread::msleep(50);
+                }
+            }
             // A capture exists to show the viewer doing its job on real anatomy: prefer CT then MR
             // over whatever sorts first (the corpus's RT Dose is a 10x10 grid at WC 1 / WW 1 —
             // technically correct, visually a black rectangle).

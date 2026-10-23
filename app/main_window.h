@@ -47,6 +47,7 @@ public:
     // ask for a chosen series so a capture shows anatomy rather than whichever row sorts first.
     bool canvasReady() const;
     bool selectSeriesForCapture(const QString& modality);
+    bool hasSeriesForCapture() const { return m_canvas != nullptr && !m_series.empty(); }
     void openMprForTest() { openMprView(); }
 
 protected:
