@@ -121,6 +121,44 @@ int main(int argc, char** argv)
     assert(!clivus::resliceVolume(vol, clivus::MprAxis::Coronal, 99, coronal));
     assert(!clivus::resliceVolume(vol, clivus::MprAxis::Sagittal, 99, sagittal));
 
+    // --- interpolation and slabs (roadmap D3). The fixture fills slice z with the value z, so a
+    // fractional position lands on a fraction and a projected slab on the extreme of its range.
+    {
+        clivus::ResliceOptions linear;
+        linear.interpolation = clivus::ResliceInterpolation::Linear;
+        clivus::ImageFrame blended;
+        assert(clivus::resliceVolume(vol, clivus::MprAxis::Axial, 0.5, linear, blended));
+        assert(blended.pixels.front() == 0.5f);   // halfway between slice 0 and slice 1
+
+        // Nearest keeps the stored value: no invented tissue.
+        clivus::ResliceOptions nearest;
+        assert(clivus::resliceVolume(vol, clivus::MprAxis::Axial, 0.5, nearest, blended));
+        assert(blended.pixels.front() == 0.0f || blended.pixels.front() == 1.0f);
+
+        // MIP over 5 mm at 2.5 mm spacing covers +/- one neighbour: slice 1 sees 0..2, max 2.
+        clivus::ResliceOptions mip;
+        mip.projection = clivus::SlabProjection::Maximum;
+        mip.slabThicknessMm = 5.0;
+        assert(clivus::resliceVolume(vol, clivus::MprAxis::Axial, 1, mip, blended));
+        assert(blended.pixels.front() == 2.0f);
+
+        // MinIP of the same slab is the low end.
+        clivus::ResliceOptions minip = mip;
+        minip.projection = clivus::SlabProjection::Minimum;
+        assert(clivus::resliceVolume(vol, clivus::MprAxis::Axial, 1, minip, blended));
+        assert(blended.pixels.front() == 0.0f);
+
+        // The slab is clipped at the stack edge, not padded with invented values.
+        assert(clivus::resliceVolume(vol, clivus::MprAxis::Axial, 0, mip, blended));
+        assert(blended.pixels.front() == 1.0f);   // slices 0 and 1 only
+
+        // The reformatted plane carries physical spacing: coronal rows run along the slice axis.
+        clivus::ImageFrame coronalOpt;
+        assert(clivus::resliceVolume(vol, clivus::MprAxis::Coronal, 1, linear, coronalOpt));
+        assert(coronalOpt.pixelSpacingRow == vol.spacingZ);
+        assert(coronalOpt.pixelSpacingCol == vol.spacingX);
+    }
+
     std::printf("volume: all checks passed (4 slices, spacing %.1f/%.1f/%.1f mm, geometric order; "
                 "MPR reslice axial/coronal/sagittal verified)\n",
                 vol.spacingX, vol.spacingY, vol.spacingZ);

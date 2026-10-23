@@ -8,7 +8,9 @@
 #include <QCloseEvent>
 #include <QFrame>
 #include <QFutureWatcher>
+#include <QComboBox>
 #include <QHBoxLayout>
+#include <QSpinBox>
 #include <QLabel>
 #include <QThreadPool>
 #include <QVBoxLayout>
@@ -105,6 +107,37 @@ MprView::MprView(SeriesInfo series, QWidget* parent)
                 [this, i](int position) { setPlanePosition(i, position); });
     }
 
+    // Reformat options (roadmap D3). Nearest stays available because it invents nothing; the linear
+    // mode blends only between adjacent slices, and the label on the status line says which is in use
+    // so a smooth image is never mistaken for measured detail.
+    auto* optionsRow = new QHBoxLayout();
+    m_interpolation = new QComboBox(this);
+    m_interpolation->addItem(tr("Nearest neighbour"), int(clivus::ResliceInterpolation::Nearest));
+    m_interpolation->addItem(tr("Linear between slices"),
+                             int(clivus::ResliceInterpolation::Linear));
+    m_projection = new QComboBox(this);
+    m_projection->addItem(tr("Single slice"), int(clivus::SlabProjection::None));
+    m_projection->addItem(tr("MIP (maximum)"), int(clivus::SlabProjection::Maximum));
+    m_projection->addItem(tr("MinIP (minimum)"), int(clivus::SlabProjection::Minimum));
+    m_thickness = new QSpinBox(this);
+    m_thickness->setRange(1, 50);
+    m_thickness->setValue(5);
+    m_thickness->setSuffix(tr(" mm"));
+    m_thickness->setToolTip(tr("Slab thickness for MIP/MinIP, centred on the current plane"));
+    optionsRow->addWidget(new QLabel(tr("Reformat:"), this));
+    optionsRow->addWidget(m_interpolation);
+    optionsRow->addWidget(m_projection);
+    optionsRow->addWidget(m_thickness);
+    optionsRow->addStretch(1);
+    outer->insertLayout(1, optionsRow);   // under the title, above the planes
+
+    connect(m_interpolation, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this] { rebuildOptions(); });
+    connect(m_projection, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this] { rebuildOptions(); });
+    connect(m_thickness, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this] { rebuildOptions(); });
+
     startVolumeLoad();
 }
 
@@ -131,8 +164,7 @@ void MprView::onVolumeLoaded()
         return;
     }
     m_volume = std::move(result.second);
-    m_status->setText(tr("Nearest-neighbour reslice through the scanner's own geometry — "
-                         "no interpolation across slices."));
+    rebuildOptions();
     // Each plane navigates its own coordinate: axial slices, coronal rows, sagittal columns.
     m_planes[0].maxIndex = m_volume.depth - 1;
     m_planes[1].maxIndex = m_volume.height - 1;
@@ -145,11 +177,41 @@ int MprView::planeIndex(int axis) const
     return (axis >= 0 && axis < int(m_planes.size())) ? m_planes[size_t(axis)].index : -1;
 }
 
+void MprView::setReformatForTest(const bool linear, const int projection, const double thicknessMm)
+{
+    m_interpolation->setCurrentIndex(linear ? 1 : 0);
+    m_projection->setCurrentIndex(std::clamp(projection, 0, 2));
+    m_thickness->setValue(std::max(1, int(std::lround(thicknessMm))));
+    rebuildOptions();
+}
+
+void MprView::rebuildOptions()
+{
+    m_options.interpolation = clivus::ResliceInterpolation(
+        m_interpolation->currentData().toInt());
+    m_options.projection = clivus::SlabProjection(m_projection->currentData().toInt());
+    m_options.slabThicknessMm = double(m_thickness->value());
+    m_thickness->setEnabled(m_options.projection != clivus::SlabProjection::None);
+    if (!m_haveVolume) return;
+    QString note = m_options.projection == clivus::SlabProjection::None
+                       ? (m_options.interpolation == clivus::ResliceInterpolation::Nearest
+                              ? tr("Nearest-neighbour reslice — no interpolation, nothing invented.")
+                              : tr("Linear interpolation between adjacent slices; in-plane detail "
+                                   "is unchanged."))
+                       : tr("%1 over a %2 mm slab, centred on each plane.")
+                             .arg(m_options.projection == clivus::SlabProjection::Maximum
+                                      ? QStringLiteral("MIP")
+                                      : QStringLiteral("MinIP"))
+                             .arg(m_thickness->value());
+    m_status->setText(note + tr(" Research/experimental — not for diagnosis."));
+    for (int i = 0; i < 3; ++i) presentPlane(m_planes[size_t(i)]);
+}
+
 void MprView::presentPlane(Plane& plane)
 {
     const int which = int(&plane - m_planes.data());
     ImageFrame frame;
-    if (!resliceVolume(m_volume, kRows[which].axis, plane.index, frame)) {
+    if (!resliceVolume(m_volume, kRows[which].axis, double(plane.index), m_options, frame)) {
         plane.canvas->setFrame(ImageFrame{});
         return;
     }

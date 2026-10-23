@@ -7,6 +7,9 @@
 #include "clivus/image_frame.h"
 #include "clivus/volume.h"
 
+class QComboBox;
+class QSpinBox;
+
 class CanvasWidget;
 class QLabel;
 class SliceBar;
@@ -32,6 +35,9 @@ public:
     int planeIndex(int axis) const;   // test probe: the plane's current slice position
     // Test probe: drive a plane's position through the same path the strip/wheel use.
     void setPositionForTest(int axis, int position) { setPlanePosition(axis, position); }
+    // Test probe: choose reformat options through the same path the combo boxes use.
+    void setReformatForTest(bool linear, int projection, double thicknessMm);
+    bool haveVolumeForTest() const { return m_haveVolume; }
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -49,6 +55,7 @@ private:
     void onVolumeLoaded();
     void presentPlane(Plane& plane);
     void setPlanePosition(int axis, int position);
+    void rebuildOptions();   // interpolation / slab controls changed: restate and redraw
 
     clivus::SeriesInfo m_series;
     clivus::Volume m_volume;
@@ -56,6 +63,10 @@ private:
     bool m_syncingWindow = false;   // re-entrancy guard: window/level echo across planes
     bool m_loadCancelled = false;
     QLabel* m_status = nullptr;
+    QComboBox* m_interpolation = nullptr;
+    QComboBox* m_projection = nullptr;
+    QSpinBox* m_thickness = nullptr;
+    clivus::ResliceOptions m_options;
     QFutureWatcher<std::pair<bool, clivus::Volume>>* m_loadWatcher = nullptr;
 
     // Order: axial, coronal, sagittal (MprAxis order).

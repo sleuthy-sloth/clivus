@@ -197,52 +197,132 @@ bool hasUsableGeometry(const SeriesInfo& series)
 
 bool resliceVolume(const Volume& volume, const MprAxis axis, const int position, ImageFrame& out)
 {
-    if (!volume.valid()) return false;
-    ImageFrame f;
+    return resliceVolume(volume, axis, position, ResliceOptions{}, out);
+}
+
+namespace {
+
+// The three planes differ only in which axis is "depth" and how (u,w) map to the volume. u indexes
+// the output's width, w its height; p is the depth position. One sampler keeps the arithmetic
+// identical between the three planes (and keeps the row-major output layout the slice browser and
+// the tests expect).
+double voxelAt(const Volume& v, const MprAxis axis, const int u, const int w, const int p)
+{
     switch (axis) {
-    case MprAxis::Axial: {
-        // The stack as scanned: every slice is already a display frame of slices; emit the slice
-        // at `position` (same convention the slice browser uses). 0/1-fails lie with the caller.
-        if (position < 0 || position >= volume.depth) return false;
-        f.width = volume.width;
-        f.height = volume.height;
-        f.channels = 1;
-        f.pixels.resize(size_t(f.width) * size_t(f.height));
-        for (int y = 0; y < f.height; ++y)
-            for (int x = 0; x < f.width; ++x)
-                f.pixels[size_t(y) * size_t(f.width) + size_t(x)] = volume.at(x, y, position);
+    case MprAxis::Axial:    return v.at(u, w, p);            // width = x, height = y, depth = z
+    case MprAxis::Coronal:  return v.at(u, p, w);            // width = x, height = z, depth = y
+    case MprAxis::Sagittal: return v.at(p, w, u);            // width = z, height = y, depth = x
+    }
+    return 0.0;
+}
+
+int depthExtent(const Volume& v, const MprAxis axis)
+{
+    switch (axis) {
+    case MprAxis::Axial:    return v.depth;
+    case MprAxis::Coronal:  return v.height;
+    case MprAxis::Sagittal: return v.width;
+    }
+    return 0;
+}
+
+// Output size: the two remaining axes.
+void planeSize(const Volume& v, const MprAxis axis, int& width, int& height)
+{
+    switch (axis) {
+    case MprAxis::Axial:    width = v.width;  height = v.height; break;
+    case MprAxis::Coronal:  width = v.width;  height = v.depth;  break;
+    case MprAxis::Sagittal: width = v.depth;  height = v.height; break;
+    }
+}
+
+}  // namespace
+
+bool resliceVolume(const Volume& volume, const MprAxis axis, const int position,
+                   const ResliceOptions& options, ImageFrame& out)
+{
+    return resliceVolume(volume, axis, double(position), options, out);
+}
+
+bool resliceVolume(const Volume& volume, const MprAxis axis, const double position,
+                   const ResliceOptions& options, ImageFrame& out)
+{
+    if (!volume.valid()) return false;
+    const int extent = depthExtent(volume, axis);
+    if (extent <= 0) return false;
+    if (position < 0.0 || position > double(extent - 1) + 0.999999) return false;
+
+    int width = 0, height = 0;
+    planeSize(volume, axis, width, height);
+    if (width <= 0 || height <= 0) return false;
+
+    const int nearest = std::max(0, std::min(int(std::lround(position)), extent - 1));
+    const int low = std::max(0, std::min(int(std::floor(position)), extent - 1));
+    const int high = std::min(low + 1, extent - 1);
+    const double fraction = std::max(0.0, std::min(1.0, position - low));
+
+    // Slab: how many planes the requested thickness covers. The slab is centred on the position and
+    // clipped to the stack, so no value is invented at the edges.
+    int slabLow = nearest, slabHigh = nearest;
+    if (options.projection != SlabProjection::None && options.slabThicknessMm > 0.0 &&
+        volume.spacingZ > 0.0) {
+        const int half = std::max(0, int(std::lround(options.slabThicknessMm / volume.spacingZ / 2.0)));
+        slabLow = std::max(0, nearest - half);
+        slabHigh = std::min(extent - 1, nearest + half);
+    }
+
+    ImageFrame frame;
+    frame.width = width;
+    frame.height = height;
+    frame.channels = 1;
+    frame.pixels.resize(size_t(width) * size_t(height));
+    // Physical spacing of the reformatted image: in-plane axes keep the volume's spacing; the
+    // "height" axis of a coronal/sagittal reformat runs along the slice normal, so it gets spacingZ.
+    switch (axis) {
+    case MprAxis::Axial:
+        frame.pixelSpacingRow = volume.spacingY;
+        frame.pixelSpacingCol = volume.spacingX;
+        break;
+    case MprAxis::Coronal:
+        frame.pixelSpacingRow = volume.spacingZ;
+        frame.pixelSpacingCol = volume.spacingX;
+        break;
+    case MprAxis::Sagittal:
+        // width runs through slices (spacingZ), height along rows (spacingY)
+        frame.pixelSpacingRow = volume.spacingY;
+        frame.pixelSpacingCol = volume.spacingZ;
         break;
     }
-    case MprAxis::Coronal: {
-        // Fixed row `position`, sweep columns and depth. Width = columns, height = slices.
-        if (position < 0 || position >= volume.height) return false;
-        f.width = volume.width;
-        f.height = volume.depth;
-        f.channels = 1;
-        f.pixels.resize(size_t(f.width) * size_t(f.height));
-        for (int z = 0; z < volume.depth; ++z)
-            for (int x = 0; x < f.width; ++x)
-                f.pixels[size_t(z) * size_t(f.width) + size_t(x)] =
-                    volume.at(x, position, z);
-        break;
+
+    for (int w = 0; w < height; ++w) {
+        for (int u = 0; u < width; ++u) {
+            double value = 0.0;
+            if (options.projection != SlabProjection::None) {
+                bool first = true;
+                for (int p = slabLow; p <= slabHigh; ++p) {
+                    const double sample = voxelAt(volume, axis, u, w, p);
+                    if (first) {
+                        value = sample;
+                        first = false;
+                    } else if (options.projection == SlabProjection::Maximum) {
+                        value = std::max(value, sample);
+                    } else {
+                        value = std::min(value, sample);
+                    }
+                }
+            } else if (options.interpolation == ResliceInterpolation::Linear && low != high) {
+                value = (1.0 - fraction) * voxelAt(volume, axis, u, w, low) +
+                        fraction * voxelAt(volume, axis, u, w, high);
+            } else {
+                value = voxelAt(volume, axis, u, w, nearest);
+            }
+            frame.pixels[size_t(w) * size_t(width) + size_t(u)] = float(value);
+        }
     }
-    case MprAxis::Sagittal: {
-        // Fixed column `position`, sweep rows and depth. Width = slices, height = rows.
-        if (position < 0 || position >= volume.width) return false;
-        f.width = volume.depth;
-        f.height = volume.height;
-        f.channels = 1;
-        f.pixels.resize(size_t(f.width) * size_t(f.height));
-        for (int y = 0; y < f.height; ++y)
-            for (int z = 0; z < volume.depth; ++z)
-                f.pixels[size_t(y) * size_t(f.width) + size_t(z)] =
-                    volume.at(position, y, z);
-        break;
-    }
-    }
-    f.minValue = volume.minValue;
-    f.maxValue = volume.maxValue;
-    out = std::move(f);
+
+    frame.minValue = volume.minValue;
+    frame.maxValue = volume.maxValue;
+    out = std::move(frame);
     return out.valid();
 }
 

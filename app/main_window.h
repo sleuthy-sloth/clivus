@@ -2,6 +2,9 @@
 #pragma once
 #include <QFutureWatcher>
 #include <QMainWindow>
+
+class QTimer;
+#include <QTimer>
 #include <QThreadPool>
 #include <memory>
 #include <vector>
@@ -29,6 +32,7 @@ class QPushButton;
 class QSplitter;
 class QStackedWidget;
 class QTimer;
+#include <QTimer>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -47,9 +51,25 @@ public:
     QString currentSeriesUid() const;
     // Test/introspection only: the Series Instance UID the annotation sidecar is keyed by.
     std::string seriesUidForTest() const { return currentSeriesUid().toStdString(); }
+    int currentSliceForTest() const { return m_currentSlice; }
+    int frameCountForTest() const
+    {
+        return (m_currentSeries >= 0 && m_currentSeries < int(m_series.size()))
+                   ? m_series[size_t(m_currentSeries)].totalFrames()
+                   : 0;
+    }
+    void showSliceForTest(int delta) { showSlice(delta); }   // user-like manual step
+    bool cineRunningForTest() const { return m_cineTimer != nullptr && m_cineTimer->isActive(); }
     void loadAnnotationsForSlice(int slice);
     void saveAnnotationsForSlice(int slice);
     void exportMeasurements();
+
+    // Cine (roadmap D3): play the current series at a fixed rate through the ordinary decode pump, so
+    // playback never decodes faster than the one-at-a-time path allows and never shows a stale slice
+    // out of order. Any manual slice action stops it, as does changing series or folder.
+    void toggleCine();
+    void stopCine(const QString& reason = QString());
+    void cineTick();
     int prefetchIndex() const { return m_prefetchIndex; }   // test probe: the smooth-scroll slot
     bool mprAvailable() const { return m_mprAction && m_mprAction->isEnabled(); }
     // Documentation capture support: true once a slice is decoded and on the canvas, and a way to
@@ -138,6 +158,10 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     QAction* m_measureAction = nullptr;
     QAction* m_roiRectAction = nullptr;
     QAction* m_roiEllipseAction = nullptr;
+    QAction* m_cineAction = nullptr;
+    QTimer* m_cineTimer = nullptr;
+    bool m_cineAdvancing = false;   // true only while cine itself is stepping slices
+    int m_cineFps = 12;
     QAction* m_mprAction = nullptr;
     QAction* m_diagnosticsAction = nullptr;   // kept for layout save/restore (roadmap 3.1)
     bool m_showDiagnostics = false;   // persisted (roadmap 3.1): the toggle survives a restart

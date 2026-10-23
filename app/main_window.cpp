@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QTextStream>
+#include <QTimer>
 #include <QIcon>
 #include <QImage>
 #include <QHBoxLayout>
@@ -307,6 +308,34 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { setActiveTool(ActiveTool::RoiRect); });
     connect(m_roiEllipseAction, &QAction::triggered, this,
             [this] { setActiveTool(ActiveTool::RoiEllipse); });
+
+    // Cine (roadmap D3). Space plays and pauses; the rate is adjustable without a dialog.
+    m_cineAction = new QAction("&Play / pause cine", this);
+    m_cineAction->setShortcut(QKeySequence(Qt::Key_Space));
+    m_cineAction->setCheckable(true);
+    m_cineAction->setToolTip("Loop the current series at 12 frames per second (Space). "
+                             "[ and ] change the rate");
+    connect(m_cineAction, &QAction::triggered, this, [this] { toggleCine(); });
+    auto* slower = new QAction("Slower playback", this);
+    slower->setShortcut(QKeySequence(Qt::Key_BracketLeft));
+    connect(slower, &QAction::triggered, this, [this] {
+        m_cineFps = std::max(2, m_cineFps - 2);
+        if (m_cineTimer->isActive()) { m_cineTimer->setInterval(1000 / m_cineFps); }
+        statusBar()->showMessage(QString("Cine rate: %1 fps").arg(m_cineFps), 3000);
+    });
+    auto* faster = new QAction("Faster playback", this);
+    faster->setShortcut(QKeySequence(Qt::Key_BracketRight));
+    connect(faster, &QAction::triggered, this, [this] {
+        m_cineFps = std::min(30, m_cineFps + 2);
+        if (m_cineTimer->isActive()) { m_cineTimer->setInterval(1000 / m_cineFps); }
+        statusBar()->showMessage(QString("Cine rate: %1 fps").arg(m_cineFps), 3000);
+    });
+    addAction(slower);
+    addAction(faster);
+
+    m_cineTimer = new QTimer(this);
+    m_cineTimer->setInterval(1000 / m_cineFps);
+    connect(m_cineTimer, &QTimer::timeout, this, &MainWindow::cineTick);
 
     auto* sidebar = new QAction("&Series sidebar", this);
     sidebar->setToolTip("Show or hide the series browser (Ctrl+B)");
@@ -629,6 +658,55 @@ bool MainWindow::canvasReady() const
     return m_canvas != nullptr && m_canvas->hasValidFrame();
 }
 
+void MainWindow::toggleCine()
+{
+    if (m_cineTimer->isActive()) {
+        stopCine();
+        return;
+    }
+    if (m_currentSeries < 0) {
+        m_cineAction->setChecked(false);
+        return;
+    }
+    const int total = m_series[size_t(m_currentSeries)].totalFrames();
+    if (total < 2) {
+        statusBar()->showMessage("A single image has nothing to play", 4000);
+        m_cineAction->setChecked(false);
+        return;
+    }
+    m_cineTimer->setInterval(1000 / std::max(2, m_cineFps));
+    m_cineTimer->start();
+    m_cineAction->setChecked(true);
+    statusBar()->showMessage(QString("Cine: playing at %1 fps (Space stops)").arg(m_cineFps), 4000);
+}
+
+void MainWindow::stopCine(const QString& reason)
+{
+    const bool wasRunning = m_cineTimer && m_cineTimer->isActive();
+    if (m_cineTimer) m_cineTimer->stop();
+    if (m_cineAction) m_cineAction->setChecked(false);
+    if (wasRunning && !reason.isEmpty()) statusBar()->showMessage(reason, 4000);
+}
+
+void MainWindow::cineTick()
+{
+    if (m_currentSeries < 0) {
+        stopCine();
+        return;
+    }
+    const int total = m_series[size_t(m_currentSeries)].totalFrames();
+    if (total < 2) {
+        stopCine();
+        return;
+    }
+    m_cineAdvancing = true;
+    // Advance from what is on screen, so a slow decode stretches the loop instead of skipping frames:
+    // cine is a view of the data, and dropping slices would hide them.
+    const int next = (m_currentSlice + 1 >= total) ? 0 : m_currentSlice + 1;
+    goToSlice(next);
+    m_cineAdvancing = false;
+}
+
 void MainWindow::openMprView()
 {
     if (m_currentSeries < 0 || m_currentSeries >= int(m_series.size())) return;
@@ -806,6 +884,7 @@ void MainWindow::setActiveTool(ActiveTool tool)
 
 void MainWindow::openFolder(const QString& dir)
 {
+    stopCine();
     // Everything already in flight belongs to the folder we are leaving: the scan is told to stop,
     // the thumbnails are cancelled before they start, and m_epoch retires any slice decode.
     ++m_epoch;
@@ -1261,6 +1340,7 @@ void MainWindow::showSeries(int index)
 void MainWindow::showSlice(int delta)
 {
     if (m_currentSeries < 0) return;
+    if (!m_cineAdvancing) stopCine();   // a manual scrub takes the wheel back
     const auto& series = m_series[size_t(m_currentSeries)];
     const int total = series.totalFrames();
     if (total <= 0) return;   // clamp() would give an upper bound of -1 here
@@ -1285,6 +1365,7 @@ void MainWindow::showSlice(int delta)
 void MainWindow::goToSlice(int index)
 {
     if (m_currentSeries < 0) return;
+    if (!m_cineAdvancing && m_cineTimer->isActive()) stopCine();
     const int total = m_series[size_t(m_currentSeries)].totalFrames();
     if (total <= 0) return;
     const int target = std::clamp(index, 0, total - 1);

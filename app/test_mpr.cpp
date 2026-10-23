@@ -146,6 +146,17 @@ int main(int argc, char** argv)
 
     view->close();
     QSettings().clear();
+    // --- reformat options (roadmap D3): interpolation and slab projection change what is drawn but
+    // never crash a plane, and the options survive a position change.
+    if (view->haveVolumeForTest()) {
+        const int before = view->planeIndex(0);
+        view->setReformatForTest(true, 1, 5.0);    // linear + MIP over 5 mm
+        CHECK(view->planeIndex(0) == before);
+        view->setReformatForTest(true, 2, 5.0);    // linear + MinIP
+        view->setReformatForTest(false, 0, 1.0);   // back to a single nearest slice
+        CHECK(view->planeIndex(0) == before);
+    }
+
     std::printf("mpr: all checks passed (eligibility both ways, three planes, navigation)\n");
     return 0;
 }

@@ -92,6 +92,17 @@ const Chapter kChapters[] = {
  "<p>The overlays report what is being shown: series identity top-left, window values and zoom "
  "top-right. Colour images are displayed without a window — the standard applies VOI LUT to "
  "greyscale only, and Clivus states so in the overlay instead of pretending otherwise.</p>"},
+{"Cine playback",
+ "<p>Some questions are easier to answer in motion: a stack that steps through a joint, a "
+ "multi-frame acquisition, a study where one slice alone looks ambiguous. Press <b>Space</b> (or "
+ "<b>View &#9656; Play / pause cine</b>) to loop the current series; press it again to stop.</p>"
+ "<p>The rate is 12 frames per second by default. <b>[</b> slows it by two frames per second "
+ "(down to 2) and <b>]</b> speeds it up (up to 30); the status bar confirms the new rate.</p>"
+ "<p>Playback uses the same one-decode-at-a-time path as the wheel, so it never shows a slice out "
+ "of order and never decodes ahead of what it can display: on a slow disk the loop simply runs "
+ "slower rather than skipping frames &#8212; skipping would hide exactly the images you are looking "
+ "for. A manual slice step, a new series, or a new folder stops playback; you are back in control "
+ "the moment you touch the wheel or the strip.</p>"},
 {"Window/Level",
  "<p>Window Center and Window Width select which range of grey levels fills the display's "
  "black to white. CT data covers thousands of values a monitor cannot draw; the window chooses "

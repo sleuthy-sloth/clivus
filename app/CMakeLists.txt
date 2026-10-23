@@ -82,6 +82,14 @@ target_link_libraries(clivus_test_annotations PRIVATE clivus_core Qt6::Widgets Q
 add_test(NAME annotations COMMAND clivus_test_annotations "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 set_tests_properties(annotations PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+qt_add_executable(clivus_test_cine test_cine.cpp main_window.cpp mpr_view.cpp annotation_store.cpp
+    server_dialog.cpp dicomweb_client.cpp series_summary.cpp branding.cpp about_dialog.cpp
+    help_window.cpp canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_cine PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    Qt6::Concurrent Qt6::Network OpenGL::GL)
+add_test(NAME cine COMMAND clivus_test_cine "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(cine PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_test(NAME dicomweb COMMAND clivus_test_dicomweb "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 
 qt_add_executable(clivus_test_server_dialog test_server_dialog.cpp server_dialog.cpp dicomweb_client.cpp)

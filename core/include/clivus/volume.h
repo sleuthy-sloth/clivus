@@ -60,4 +60,35 @@ enum class MprAxis { Axial, Coronal, Sagittal };
 // what it is. Fails when the volume is invalid or the position is out of range.
 bool resliceVolume(const Volume& volume, MprAxis axis, int position, ImageFrame& out);
 
+// How to fill a reformatted plane between the stored slices.
+//
+// Nearest: the voxel closest to the requested position — nothing invented, blocky at thickness.
+// Linear: linear interpolation along the slice axis only. In-plane coordinates land on voxel centres
+// by construction (the planes are axis-aligned with the acquisition grid), so there is nothing to
+// blend within a slice; blending *between* slices is what removes the stair-step when a reformat is
+// viewed at an oblique thickness. It is never applied across a gap larger than one slice.
+enum class ResliceInterpolation { Nearest, Linear };
+
+// A slab projects several neighbouring slices into one image along the slice normal.
+enum class SlabProjection { None, Maximum, Minimum };
+
+struct ResliceOptions {
+    ResliceInterpolation interpolation = ResliceInterpolation::Nearest;
+    SlabProjection projection = SlabProjection::None;
+    double slabThicknessMm = 0.0;   // 0 or <= spacing => a single slice
+};
+
+// Reslice with options. The slab is centred on the requested plane and its thickness is converted to
+// a slice count with the volume's spacingZ; MIP takes the maximum along the normal, MinIP the
+// minimum. A slab that would run off the stack is clipped to what exists — never padded with values
+// that were not measured. Fails exactly like the simple form (invalid volume, position out of range).
+bool resliceVolume(const Volume& volume, MprAxis axis, int position, const ResliceOptions& options,
+                   ImageFrame& out);
+
+// Fractional-position form: the value used by the MPR view when its crosshair lands between slices.
+// Nearest rounds; Linear blends the two neighbouring planes by the fraction. A slab is projected over
+// the integer range the thickness covers, then the projected planes are blended the same way.
+bool resliceVolume(const Volume& volume, MprAxis axis, double position, const ResliceOptions& options,
+                   ImageFrame& out);
+
 }  // namespace clivus
