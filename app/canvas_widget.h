@@ -42,9 +42,11 @@ private:
     std::vector<uint8_t> m_bytes;
     unsigned int m_tex = 0;
     // Size the texture storage was last allocated at. A window/level change keeps it, so the update
-    // is a glTexSubImage2D; a new frame with different dimensions has to reallocate.
+    // is a glTexSubImage2D; a new frame with different dimensions, or a different channel count, has
+    // to reallocate.
     int m_texWidth = 0;
     int m_texHeight = 0;
+    int m_texChannels = 1;
     bool m_texDirty = true;
     double m_center = 0.0;
     double m_width = 1.0;

@@ -9,6 +9,10 @@ namespace clivus {
 struct ImageFrame {
     int width = 0;
     int height = 0;
+    // 1 = grey, 3 = RGB. A colour frame holds R,G,B interleaved per pixel, already in display order
+    // (DCMTK converts the file's YBR/planar variant before we see it). Colour is not windowed: DICOM
+    // applies the VOI transform to greyscale only, so render() ignores the window for these.
+    int channels = 1;
     std::vector<float> pixels;   // modality units, row-major, top-left origin
     float minValue = 0.0f;       // over non-padding pixels
     float maxValue = 0.0f;
@@ -21,10 +25,18 @@ struct ImageFrame {
     // render(), so pixels, min/max and the window numbers stay in modality units.
     bool invert = false;
 
-    bool valid() const { return width > 0 && height > 0 && pixels.size() == size_t(width) * size_t(height); }
+    bool isColour() const { return channels == 3; }
+
+    // Bytes render() writes: one per pixel for grey, three for RGB.
+    size_t byteCount() const { return size_t(width) * size_t(height) * size_t(channels); }
+
+    bool valid() const
+    {
+        return width > 0 && height > 0 && channels > 0 && pixels.size() == byteCount();
+    }
 
     // DICOM PS3.3 C.11.2.1.2 linear VOI LUT - the formula OsiriX/Horos uses.
-    // out must hold width*height bytes.
+    // out must hold byteCount() bytes.
     void render(uint8_t* out, double center, double width) const;
 
     // Window covering the whole stored range (Horos "full dynamic").
@@ -36,5 +48,9 @@ struct ImageFrame {
 ImageFrame makeFrame(std::vector<float> stored, int width, int height,
                      float slope = 1.0f, float intercept = 0.0f,
                      bool hasPadding = false, float paddingValue = 0.0f);
+
+// rgb: interleaved R,G,B, row-major, already in 0..255 display units. There is no modality or VOI
+// transform to apply, so nothing is rescaled and nothing is windowed.
+ImageFrame makeColourFrame(std::vector<float> rgb, int width, int height);
 
 }  // namespace clivus

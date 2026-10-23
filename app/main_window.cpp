@@ -31,12 +31,15 @@ QImage thumbnailImage(const QString& file)
 {
     clivus::ImageFrame frame;
     if (file.isEmpty() || !clivus::loadFrame(file.toStdString(), frame)) return {};
-    std::vector<uint8_t> bytes(frame.pixels.size());
+    std::vector<uint8_t> bytes(frame.byteCount());
     double c = 0.0, w = 1.0;
     frame.fullWindow(c, w);
     frame.render(bytes.data(), c, w);
+    // A colour frame is three bytes per pixel; a grey one is a single byte.
+    const QImage::Format format =
+        frame.isColour() ? QImage::Format_RGB888 : QImage::Format_Grayscale8;
     // Qt keeps ownership of the buffer via the deleter, so copy the row bytes.
-    QImage img(bytes.data(), frame.width, frame.height, frame.width, QImage::Format_Grayscale8);
+    QImage img(bytes.data(), frame.width, frame.height, frame.width * frame.channels, format);
     return img.copy().scaled(72, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
 
@@ -306,6 +309,7 @@ void MainWindow::sliceFinished()
         return;
     }
     m_currentSlice = r.index;
+    m_currentIsColour = r.frame.isColour();
     m_canvas->setFrame(std::move(r.frame));
     updateInfo();
     pumpSlice();     // the wheel may have moved while this decode was running

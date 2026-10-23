@@ -49,10 +49,16 @@ add_executable(clivus_test_photometric tests/test_photometric.cpp)
 target_link_libraries(clivus_test_photometric PRIVATE clivus_core)
 add_test(NAME photometric COMMAND clivus_test_photometric)
 
+# Writes its own three objects (RGB interleaved, RGB planar, YBR_FULL) over the same pixels, so no
+# corpus needed.
+add_executable(clivus_test_colour tests/test_colour.cpp)
+target_link_libraries(clivus_test_colour PRIVATE clivus_core)
+add_test(NAME colour COMMAND clivus_test_colour)
+
 # The tests are assert-based, and Release would define NDEBUG and silently erase every check while
 # still printing "all checks passed". Strip it for test targets only.
-foreach(test_target clivus_test_image_frame clivus_test_decode clivus_test_volume clivus_test_index_store
-                     clivus_test_photometric)
+foreach(test_target clivus_test_image_frame clivus_test_decode clivus_test_volume
+                     clivus_test_index_store clivus_test_photometric clivus_test_colour)
     if(MSVC)
         target_compile_options(${test_target} PRIVATE /UNDEBUG)
     else()

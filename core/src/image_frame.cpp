@@ -31,9 +31,32 @@ ImageFrame makeFrame(std::vector<float> stored, int width, int height,
     return f;
 }
 
+ImageFrame makeColourFrame(std::vector<float> rgb, int width, int height)
+{
+    ImageFrame f;
+    f.width = width;
+    f.height = height;
+    f.channels = 3;
+    f.pixels = std::move(rgb);
+    // The display range of an 8-bit colour sample. Nothing windows a colour frame, so these are only
+    // here to keep fullWindow() answering something truthful.
+    f.minValue = 0.0f;
+    f.maxValue = 255.0f;
+    return f;
+}
+
 void ImageFrame::render(uint8_t* out, double center, double width) const
 {
     if (!out || !valid()) return;
+
+    if (channels == 3) {
+        // No VOI transform applies to a colour image (PS3.3 C.11.2), so the window arguments are
+        // ignored rather than silently shifting the colours.
+        for (size_t i = 0; i < pixels.size(); ++i)
+            out[i] = uint8_t(std::clamp(pixels[i], 0.0f, 255.0f) + 0.5f);
+        return;
+    }
+
     if (width < 1.0) width = 1.0;           // guard: a zero window would divide by zero
 
     const double first = center - 0.5 - (width - 1.0) / 2.0;
@@ -56,6 +79,7 @@ void ImageFrame::render(uint8_t* out, double center, double width) const
 void ImageFrame::fullWindow(double& center, double& width) const
 {
     if (!valid()) { center = 0.0; width = 1.0; return; }
+    if (channels == 3) { center = 127.5; width = 256.0; return; }   // ignored by render()
     center = (double(minValue) + double(maxValue)) / 2.0;
     width = std::max(1.0, double(maxValue) - double(minValue));
 }

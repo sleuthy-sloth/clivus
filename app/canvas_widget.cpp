@@ -28,6 +28,7 @@ void CanvasWidget::initializeGL()
     // longer describes it.
     m_texWidth = 0;
     m_texHeight = 0;
+    m_texChannels = 1;
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -72,18 +73,23 @@ void CanvasWidget::uploadTexture()
     if (m_tex == 0 || !m_frame.valid()) return;
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    if (m_texWidth == m_frame.width && m_texHeight == m_frame.height) {
+    // GL_LUMINANCE reads one byte per texel, GL_RGB three: the frame says which, and the byte buffer
+    // render() filled already matches it.
+    const GLenum format = m_frame.isColour() ? GL_RGB : GL_LUMINANCE;
+    if (m_texWidth == m_frame.width && m_texHeight == m_frame.height &&
+        m_texChannels == m_frame.channels) {
         // Same slice, new window: the storage is already the right size, so only the bytes move.
         // This is the drag path — every mouse move lands here, and reallocating the texture for each
         // one was pure waste.
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_frame.width, m_frame.height, GL_LUMINANCE,
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_frame.width, m_frame.height, format,
                         GL_UNSIGNED_BYTE, m_bytes.data());
         return;
     }
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frame.width, m_frame.height, 0, GL_LUMINANCE,
+    glTexImage2D(GL_TEXTURE_2D, 0, format, m_frame.width, m_frame.height, 0, format,
                  GL_UNSIGNED_BYTE, m_bytes.data());
     m_texWidth = m_frame.width;
     m_texHeight = m_frame.height;
+    m_texChannels = m_frame.channels;
 }
 
 void CanvasWidget::paintGL()
@@ -93,7 +99,7 @@ void CanvasWidget::paintGL()
 
     m_windowMs = 0.0;
     if (m_texDirty && m_frame.valid()) {
-        m_bytes.resize(m_frame.pixels.size());
+        m_bytes.resize(m_frame.byteCount());
         m_frame.render(m_bytes.data(), m_center, m_width);
         uploadTexture();
         m_texDirty = false;
@@ -153,6 +159,8 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
     m_lastMouse = e->pos();
 
     if (m_drag == Drag::Window) {
+        // A colour image has no VOI transform, so there is nothing for the drag to move.
+        if (m_frame.isColour()) return;
         // Horos convention: horizontal drag widens the window, vertical drag moves the centre.
         m_width = std::max(1.0, m_width * std::exp(double(d.x()) / 200.0));
         m_center -= double(d.y()) * m_width / 300.0;

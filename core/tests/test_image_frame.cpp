@@ -135,6 +135,27 @@ int main()
         check(!s.locate(0, f, fr), "locate in an empty series", 0, 0);
     }
 
+    // 13. a colour frame is three bytes per pixel and refuses to be windowed
+    {
+        ImageFrame f = makeColourFrame({255, 0, 0, 0, 255, 0}, 2, 1);
+        check(f.valid(), "colour frame valid", 0, 0);
+        check(f.isColour(), "isColour", 0, 0);
+        eq(f.minValue, 0.0, "colour min");
+        eq(f.maxValue, 255.0, "colour max");
+        std::vector<uint8_t> out(6);
+        f.render(out.data(), 100.0, 2.0);   // a window that would crush a greyscale frame to black
+        check(out[0] == 255 && out[1] == 0 && out[2] == 0 && out[3] == 0 && out[4] == 255 &&
+                  out[5] == 0,
+              "render passes colour samples through untouched", out[0], 255);
+        double c = 0, w = 0;
+        f.fullWindow(c, w);
+        eq(w, 256.0, "colour fullWindow width");
+        ImageFrame bad;
+        bad.width = 2; bad.height = 1; bad.channels = 0;
+        bad.pixels = {1, 2};   // two samples for a frame claiming channels=0
+        check(!bad.valid(), "zero channels is invalid", 0, 0);
+    }
+
     if (g_failures == 0) std::printf("image_frame: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
 }

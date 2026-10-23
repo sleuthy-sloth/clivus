@@ -244,6 +244,25 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
     // Clamped, not rejected: a caller holding an index from a stale scan gets the nearest frame.
     const size_t want = frameIndex < 0 ? 0 : std::min(size_t(frameIndex), frames - 1);
 
+    // Colour first, because it needs a different DCMTK accessor than greyscale.
+    //
+    // getOutputData() is the one call that returns interleaved 8-bit RGB whatever the file holds:
+    // DCMTK converts from RGB, YBR_FULL, YBR_FULL_422 / YBR_PARTIAL_422 (including the subsampling
+    // those imply) and honours PlanarConfiguration for us, and scales 16-bit samples down to 8. That
+    // scaling is normally something we refuse to let DCMTK do, because it would bake in a VOI choice;
+    // a colour image has no VOI transform, so there is nothing to lose here.
+    if (!img.isMonochrome()) {
+        const void* rgb = img.getOutputData(8, static_cast<unsigned long>(want));
+        if (!rgb) return false;
+        const auto* p = static_cast<const Uint8*>(rgb);
+        std::vector<float> values(perFrame * 3);
+        for (size_t i = 0; i < values.size(); ++i) values[i] = float(p[i]);
+        out = makeColourFrame(std::move(values), int(img.getWidth()), int(img.getHeight()));
+        out.frameIndex = int(want);
+        out.frameCount = int(frames);
+        return out.valid();
+    }
+
     // Pick this frame out of the pixel buffer. DicomImage usually hands back the whole stack, so the
     // frames are contiguous and the frame's own offset is all that is needed; when the buffer holds
     // fewer frames than NumberOfFrames claims, a single-frame sub-image is built rather than trusting
@@ -259,8 +278,6 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
         offset = 0;
         if (!inter || inter->getCount() < perFrame) return false;
     }
-
-    if (!img.isMonochrome()) return false;   // colour images: P1 ticket (planar config / PALETTE COLOR)
 
     // DicomImage::getInterData() is a DiPixel*; for a monochrome image it is a DiMonoPixel,
     // which is what carries the representation (Uint8/16/32, signed or not).

@@ -64,6 +64,7 @@ private:
     QString m_folder;
     int m_currentSeries = -1;
     int m_currentSlice = -1;   // -1: nothing decoded for the current series yet
+    bool m_currentIsColour = false;   // window/level means nothing for a colour frame
     QString m_timing;
     QString m_windowLevel;
 
