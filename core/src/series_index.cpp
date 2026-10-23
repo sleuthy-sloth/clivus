@@ -25,6 +25,30 @@ std::string tagString(DcmItem* ds, const DcmTagKey& key)
     return {};
 }
 
+// A text element's value, whatever VR the sender used. Two things make this more than a wrapper:
+//
+//  - The RT Dose in our corpus carries Modality, Series Instance UID, Patient Name, Pixel Spacing and
+//    DoseGridScaling with VR=UN. For those, findAndGetOFStringArray *succeeds* but answers with a
+//    backslash-escaped octal dump of the bytes ("52\54\44\4f\53\45" for "RTDOSE"), so a VR-strict
+//    read is not the problem — a silently wrong string is. Reading the bytes gives the ASCII back.
+//  - Everything else takes the normal string path.
+std::string anyVRString(DcmItem* ds, const DcmTagKey& key)
+{
+    DcmElement* elem = nullptr;
+    if (!ds || ds->findAndGetElement(key, elem).bad() || !elem) return {};
+    const DcmEVR vr = elem->getVR();
+    if (vr == EVR_UN || vr == EVR_OB || vr == EVR_OW) {
+        Uint8* raw = nullptr;
+        if (elem->getUint8Array(raw).bad() || !raw) return {};
+        std::string s(reinterpret_cast<const char*>(raw), size_t(elem->getLength()));
+        while (!s.empty() && (s.back() == '\0' || s.back() == ' ')) s.pop_back();
+        return s;
+    }
+    OFString v;
+    if (ds->findAndGetOFStringArray(key, v).good()) return std::string(v.c_str());
+    return {};
+}
+
 long instanceNumber(DcmItem* ds)
 {
     OFString v;
@@ -33,23 +57,33 @@ long instanceNumber(DcmItem* ds)
     return 0;
 }
 
-// Internal representation -> float, without any modality transform (we apply slope/intercept).
-// maxPixels keeps us on frame 0: for some pixel types DicomImage hands back the whole stack
-// (a 15-frame 32-bit RT Dose reports 1500 pixels for a 10x10 image), and frames are contiguous.
-bool interDataToFloat(const DiMonoPixel* px, size_t maxPixels, std::vector<float>& out)
+// NumberOfFrames, or 1 when the object does not say (a plain single-frame image omits it). An object
+// that claims 0 frames is treated as 1: it still has a pixel buffer worth showing.
+int frameCountOf(DcmItem* ds)
 {
-    if (!px || !px->getData()) return false;
-    const size_t n = std::min(size_t(px->getCount()), maxPixels);
-    if (n == 0) return false;
+    if (!ds || !ds->tagExistsWithValue(DCM_NumberOfFrames)) return 1;
+    const long n = std::strtol(anyVRString(ds, DCM_NumberOfFrames).c_str(), nullptr, 10);
+    return n > 1 ? int(n) : 1;
+}
+
+// Internal representation -> float, without any modality transform (we apply slope/intercept).
+// offset/count pick one frame out of the buffer: for some pixel types DicomImage hands back the whole
+// stack (a 15-frame 32-bit RT Dose reports 1500 pixels for a 10x10 image), and frames are contiguous.
+// Taking exactly width*height values from the frame's own offset is what keeps a 32-bit object from
+// reading past one frame.
+bool interDataToFloat(const DiMonoPixel* px, size_t offset, size_t count, std::vector<float>& out)
+{
+    if (!px || !px->getData() || count == 0) return false;
+    if (offset + count > size_t(px->getCount())) return false;
     const void* d = px->getData();
-    out.resize(n);
+    out.resize(count);
     switch (px->getRepresentation()) {
-    case EPR_Uint8:  { auto p = static_cast<const Uint8*>(d); for (size_t i = 0; i < n; ++i) out[i] = float(p[i]); } break;
-    case EPR_Sint8:  { auto p = static_cast<const Sint8*>(d); for (size_t i = 0; i < n; ++i) out[i] = float(p[i]); } break;
-    case EPR_Uint16: { auto p = static_cast<const Uint16*>(d); for (size_t i = 0; i < n; ++i) out[i] = float(p[i]); } break;
-    case EPR_Sint16: { auto p = static_cast<const Sint16*>(d); for (size_t i = 0; i < n; ++i) out[i] = float(p[i]); } break;
-    case EPR_Uint32: { auto p = static_cast<const Uint32*>(d); for (size_t i = 0; i < n; ++i) out[i] = float(p[i]); } break;
-    case EPR_Sint32: { auto p = static_cast<const Sint32*>(d); for (size_t i = 0; i < n; ++i) out[i] = float(p[i]); } break;
+    case EPR_Uint8:  { auto p = static_cast<const Uint8*>(d); for (size_t i = 0; i < count; ++i) out[i] = float(p[offset + i]); } break;
+    case EPR_Sint8:  { auto p = static_cast<const Sint8*>(d); for (size_t i = 0; i < count; ++i) out[i] = float(p[offset + i]); } break;
+    case EPR_Uint16: { auto p = static_cast<const Uint16*>(d); for (size_t i = 0; i < count; ++i) out[i] = float(p[offset + i]); } break;
+    case EPR_Sint16: { auto p = static_cast<const Sint16*>(d); for (size_t i = 0; i < count; ++i) out[i] = float(p[offset + i]); } break;
+    case EPR_Uint32: { auto p = static_cast<const Uint32*>(d); for (size_t i = 0; i < count; ++i) out[i] = float(p[offset + i]); } break;
+    case EPR_Sint32: { auto p = static_cast<const Sint32*>(d); for (size_t i = 0; i < count; ++i) out[i] = float(p[offset + i]); } break;
     default: return false;
     }
     return true;
@@ -80,7 +114,14 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
 {
     registerCodecs();
     std::map<std::string, SeriesInfo> bySeries;
-    std::map<std::string, std::vector<std::pair<long, std::string>>> sortKeys;
+    // The sort key carries the frame count, so files and frameCounts come out of one sort and cannot
+    // drift apart.
+    struct Entry {
+        long instance = 0;
+        std::string path;
+        int frames = 1;
+    };
+    std::map<std::string, std::vector<Entry>> sortKeys;
 
     if (control && control->cancel.load(std::memory_order_relaxed)) return {};
 
@@ -104,13 +145,16 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         DcmDataset* ds = header->getDataset();
 
         SeriesInfo s;
-        s.seriesUid = tagString(ds, DCM_SeriesInstanceUID);
+        // anyVRString throughout: the RT Dose in the corpus carries its Series Instance UID, Modality
+        // and Patient Name as VR=UN, and the escaped string the getter hands back would group it under
+        // a mangled UID and show it with a blank modality.
+        s.seriesUid = anyVRString(ds, DCM_SeriesInstanceUID);
         if (s.seriesUid.empty()) continue;
-        s.studyUid = tagString(ds, DCM_StudyInstanceUID);
-        s.modality = tagString(ds, DCM_Modality);
-        s.patientName = tagString(ds, DCM_PatientName);
-        s.studyDescription = tagString(ds, DCM_StudyDescription);
-        s.seriesDescription = tagString(ds, DCM_SeriesDescription);
+        s.studyUid = anyVRString(ds, DCM_StudyInstanceUID);
+        s.modality = anyVRString(ds, DCM_Modality);
+        s.patientName = anyVRString(ds, DCM_PatientName);
+        s.studyDescription = anyVRString(ds, DCM_StudyDescription);
+        s.seriesDescription = anyVRString(ds, DCM_SeriesDescription);
         Uint16 rows = 0, cols = 0;
         ds->findAndGetUint16(DCM_Rows, rows);
         ds->findAndGetUint16(DCM_Columns, cols);
@@ -120,7 +164,7 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         auto& known = bySeries[s.seriesUid];
         if (known.files.empty()) known = s;                       // first file wins the metadata
         known.files.push_back(p.string());
-        sortKeys[s.seriesUid].emplace_back(instanceNumber(ds), p.string());
+        sortKeys[s.seriesUid].push_back(Entry{instanceNumber(ds), p.string(), frameCountOf(ds)});
     }
 
     std::vector<SeriesInfo> out;
@@ -128,9 +172,13 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
     for (auto& [uid, s] : bySeries) {
         auto& keys = sortKeys[uid];
         std::stable_sort(keys.begin(), keys.end(),
-                         [](const auto& a, const auto& b) { return a.first < b.first; });
+                         [](const auto& a, const auto& b) { return a.instance < b.instance; });
         s.files.clear();
-        for (auto& k : keys) s.files.push_back(std::move(k.second));
+        s.frameCounts.clear();
+        for (auto& k : keys) {
+            s.files.push_back(std::move(k.path));
+            s.frameCounts.push_back(k.frames);
+        }
         out.push_back(std::move(s));
     }
     std::sort(out.begin(), out.end(), [](const SeriesInfo& a, const SeriesInfo& b) {
@@ -140,7 +188,39 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
     return out;
 }
 
-bool loadFrame(const std::string& file, ImageFrame& out)
+int SeriesInfo::totalFrames() const
+{
+    if (frameCounts.size() != files.size()) return int(files.size());
+    int total = 0;
+    for (int n : frameCounts) total += n > 0 ? n : 1;
+    return total;
+}
+
+bool SeriesInfo::locate(int flat, int& fileIndex, int& frameIndex) const
+{
+    fileIndex = -1;
+    frameIndex = -1;
+    if (flat < 0) return false;
+    if (frameCounts.size() != files.size()) {   // counts unknown: one frame per object
+        if (flat >= int(files.size())) return false;
+        fileIndex = flat;
+        frameIndex = 0;
+        return true;
+    }
+    int remaining = flat;
+    for (size_t i = 0; i < files.size(); ++i) {
+        const int n = frameCounts[i] > 0 ? frameCounts[i] : 1;
+        if (remaining < n) {
+            fileIndex = int(i);
+            frameIndex = remaining;
+            return true;
+        }
+        remaining -= n;
+    }
+    return false;
+}
+
+bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
 {
     registerCodecs();
     DcmFileFormat ff;
@@ -157,16 +237,37 @@ bool loadFrame(const std::string& file, ImageFrame& out)
     // CIF_IgnoreModalityTransformation: keep stored values and apply slope/intercept ourselves,
     // so the window/level numbers match what Horos shows for the same object.
     DicomImage img(ds, EXS_LittleEndianExplicit, CIF_IgnoreModalityTransformation);
-    if (img.getStatus() != EIS_Normal || img.getFrameCount() < 1) return false;
+    if (img.getStatus() != EIS_Normal) return false;
+    const size_t frames = size_t(img.getFrameCount());
+    const size_t perFrame = size_t(img.getWidth()) * size_t(img.getHeight());
+    if (frames < 1 || perFrame == 0) return false;
+    // Clamped, not rejected: a caller holding an index from a stale scan gets the nearest frame.
+    const size_t want = frameIndex < 0 ? 0 : std::min(size_t(frameIndex), frames - 1);
+
+    // Pick this frame out of the pixel buffer. DicomImage usually hands back the whole stack, so the
+    // frames are contiguous and the frame's own offset is all that is needed; when the buffer holds
+    // fewer frames than NumberOfFrames claims, a single-frame sub-image is built rather than trusting
+    // an offset that is not there.
+    const DiPixel* inter = img.getInterData();
+    if (!inter) return false;
+    size_t offset = want * perFrame;
+    std::unique_ptr<DicomImage> single;
+    if (inter->getCount() < offset + perFrame) {
+        single.reset(img.createDicomImage(static_cast<unsigned long>(want), 1));
+        if (!single || single->getStatus() != EIS_Normal) return false;
+        inter = single->getInterData();
+        offset = 0;
+        if (!inter || inter->getCount() < perFrame) return false;
+    }
+
     if (!img.isMonochrome()) return false;   // colour images: P1 ticket (planar config / PALETTE COLOR)
 
     // DicomImage::getInterData() is a DiPixel*; for a monochrome image it is a DiMonoPixel,
     // which is what carries the representation (Uint8/16/32, signed or not).
-    const DiMonoPixel* mono = static_cast<const DiMonoPixel*>(img.getInterData());
+    const DiMonoPixel* mono = static_cast<const DiMonoPixel*>(inter);
     if (!mono) return false;
-    // shortcut: frame 0 only; multi-frame objects (US cine, enhanced CT) need per-frame access.
     std::vector<float> raw;
-    if (!interDataToFloat(mono, size_t(img.getWidth()) * size_t(img.getHeight()), raw)) return false;
+    if (!interDataToFloat(mono, offset, perFrame, raw)) return false;
 
     float slope = 1.0f;
     float intercept = 0.0f;
@@ -205,6 +306,8 @@ bool loadFrame(const std::string& file, ImageFrame& out)
     out = makeFrame(std::move(raw), int(img.getWidth()), int(img.getHeight()),
                     slope, intercept, hasPadding, paddingValue);
     out.invert = invert;
+    out.frameIndex = int(want);
+    out.frameCount = int(frames);
     return out.valid();
 }
 

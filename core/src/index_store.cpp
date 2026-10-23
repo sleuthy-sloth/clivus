@@ -12,7 +12,9 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr const char* kIndexName = ".clivus-index.sqlite";
-constexpr const char* kSchemaVersion = "1";
+// Bumped when the cached columns change: an index written by an older build simply reports a miss and
+// the folder is rescanned, so there is no migration path to keep working.
+constexpr const char* kSchemaVersion = "2";
 
 bool exec(sqlite3* db, const char* sql)
 {
@@ -73,7 +75,8 @@ bool IndexStore::open(const std::string& dataFolder)
         "CREATE TABLE IF NOT EXISTS series(series_uid TEXT PRIMARY KEY, ordinal INTEGER, study_uid TEXT,"
         " modality TEXT, patient_name TEXT, study_description TEXT, series_description TEXT,"
         " width INTEGER, height INTEGER);"
-        "CREATE TABLE IF NOT EXISTS series_file(series_uid TEXT, ordinal INTEGER, path TEXT);"
+        "CREATE TABLE IF NOT EXISTS series_file(series_uid TEXT, ordinal INTEGER, path TEXT,"
+        " frames INTEGER);"
         "CREATE INDEX IF NOT EXISTS series_file_uid ON series_file(series_uid, ordinal);";
     if (!exec(m_db, schema)) {
         close();
@@ -104,7 +107,7 @@ std::vector<SeriesInfo> IndexStore::load()
 
     const char* sql =
         "SELECT s.series_uid, s.study_uid, s.modality, s.patient_name, s.study_description,"
-        " s.series_description, s.width, s.height, f.path"
+        " s.series_description, s.width, s.height, f.path, f.frames"
         " FROM series s LEFT JOIN series_file f ON f.series_uid = s.series_uid"
         " ORDER BY s.ordinal, f.ordinal;";
     if (sqlite3_prepare_v2(m_db, sql, -1, &st, nullptr) != SQLITE_OK) return out;
@@ -127,7 +130,13 @@ std::vector<SeriesInfo> IndexStore::load()
             out.push_back(std::move(s));
         }
         const auto* path = sqlite3_column_text(st, 8);
-        if (path) out.back().files.emplace_back(reinterpret_cast<const char*>(path));
+        if (path) {
+            out.back().files.emplace_back(reinterpret_cast<const char*>(path));
+            // A row from before frames were cached reads as NULL here, which totalFrames() treats as
+            // one frame per object — but that cannot happen for a version-2 index.
+            const int frames = sqlite3_column_int(st, 9);
+            out.back().frameCounts.push_back(frames > 0 ? frames : 1);
+        }
     }
     sqlite3_finalize(st);
     return out;
@@ -145,8 +154,8 @@ void IndexStore::save(const std::vector<SeriesInfo>& series)
         sqlite3_prepare_v2(m_db,
                            "INSERT INTO series VALUES(?,?,?,?,?,?,?,?,?)", -1, &insertSeries,
                            nullptr) == SQLITE_OK &&
-        sqlite3_prepare_v2(m_db, "INSERT INTO series_file VALUES(?,?,?)", -1, &insertFile, nullptr) ==
-            SQLITE_OK;
+        sqlite3_prepare_v2(m_db, "INSERT INTO series_file VALUES(?,?,?,?)", -1, &insertFile,
+                           nullptr) == SQLITE_OK;
     if (prepared) {
         for (size_t i = 0; i < series.size(); ++i) {
             const SeriesInfo& s = series[i];
@@ -166,6 +175,8 @@ void IndexStore::save(const std::vector<SeriesInfo>& series)
                 bindText(insertFile, 1, s.seriesUid);
                 sqlite3_bind_int(insertFile, 2, int(f));
                 bindText(insertFile, 3, s.files[f]);
+                const int frames = f < s.frameCounts.size() ? s.frameCounts[f] : 1;
+                sqlite3_bind_int(insertFile, 4, frames > 0 ? frames : 1);
                 sqlite3_step(insertFile);
                 sqlite3_reset(insertFile);
             }

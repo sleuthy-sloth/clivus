@@ -99,6 +99,37 @@ int main(int argc, char** argv)
         fs::remove_all(dir, ec);
     }
 
+    {   // A multi-frame object is one object and many slices. The count has to come from the header
+        // alone — the browser decides how far it can scroll before it decodes anything.
+        const auto series = clivus::scanDirectory(corpus);
+        bool sawRtdose = false;
+        bool sawSingle = false;
+        for (const auto& s : series) {
+            if (s.modality == "RTDOSE") {
+                sawRtdose = true;
+                expect(s.files.size() == 1, "the RT Dose series holds one object");
+                expect(s.frameCounts.size() == s.files.size(),
+                       "frame counts are parallel to the file list");
+                expect(!s.frameCounts.empty() && s.frameCounts[0] == 15,
+                       "the RT Dose object reports 15 frames from its header");
+                expect(s.totalFrames() == 15, "totalFrames counts frames, not objects");
+                int fileIndex = -1, frameIndex = -1;
+                expect(s.locate(14, fileIndex, frameIndex) && fileIndex == 0 && frameIndex == 14,
+                       "the last frame maps to frame 14 of the only object");
+                expect(!s.locate(15, fileIndex, frameIndex), "there is no frame 15");
+            }
+            if (s.modality == "CT") {
+                sawSingle = true;
+                expect(s.frameCounts.size() == 1 && s.frameCounts[0] == 1,
+                       "a single-frame object reports one frame, not zero");
+                expect(s.totalFrames() == int(s.files.size()),
+                       "a single-frame series steps once per object");
+            }
+        }
+        expect(sawRtdose, "the corpus has an RT Dose object to check multi-frame scanning against");
+        expect(sawSingle, "the corpus has a single-frame object to compare against");
+    }
+
     if (failures == 0) std::printf("scan: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }

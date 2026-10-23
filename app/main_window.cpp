@@ -42,11 +42,17 @@ QImage thumbnailImage(const QString& file)
 
 QString seriesLabel(const clivus::SeriesInfo& s)
 {
-    return QString("%1 · %2\n%3 objects · %4×%5")
+    // Frames only when they say something the object count does not: a 15-frame RT Dose is one object
+    // and fifteen slices, and the list should not pretend otherwise.
+    const int frames = s.totalFrames();
+    const QString count = frames > int(s.files.size())
+                              ? QString("%1 objects · %2 frames").arg(s.files.size()).arg(frames)
+                              : QString("%1 objects").arg(s.files.size());
+    return QString("%1 · %2\n%3 · %4×%5")
         .arg(QString::fromStdString(s.modality))
         .arg(QString::fromStdString(s.seriesDescription.empty() ? s.studyDescription
                                                               : s.seriesDescription))
-        .arg(s.files.size())
+        .arg(count)
         .arg(s.width)
         .arg(s.height);
 }
@@ -253,22 +259,27 @@ void MainWindow::fillReadyThumbnails()
 }
 
 // Decodes are strictly one at a time and always chase m_desiredSlice, so spinning the wheel while a
-// decode runs costs one more decode after it, not a queue of them.
+// decode runs costs one more decode after it, not a queue of them. A slice index is a frame index
+// across the whole series, so one 15-frame object is 15 steps rather than one.
 void MainWindow::pumpSlice()
 {
     if (m_sliceInFlight || m_currentSeries < 0 || m_desiredSlice < 0) return;
-    const auto& files = m_series[size_t(m_currentSeries)].files;
-    if (m_desiredSlice >= int(files.size()) || m_desiredSlice == m_currentSlice) return;
+    const auto& series = m_series[size_t(m_currentSeries)];
+    if (m_desiredSlice >= series.totalFrames() || m_desiredSlice == m_currentSlice) return;
+
+    int fileIndex = 0, frameIndex = 0;
+    if (!series.locate(m_desiredSlice, fileIndex, frameIndex)) return;
+    if (fileIndex < 0 || fileIndex >= int(series.files.size())) return;
 
     const int index = m_desiredSlice;
-    const std::string path = files[size_t(index)];
+    const std::string path = series.files[size_t(fileIndex)];
     const quint64 epoch = m_epoch;
     m_sliceInFlight = true;
-    m_sliceWatcher->setFuture(QtConcurrent::run(&m_foreground, [path, index, epoch] {
+    m_sliceWatcher->setFuture(QtConcurrent::run(&m_foreground, [path, index, frameIndex, epoch] {
         SliceResult r;
         r.index = index;
         r.epoch = epoch;
-        r.ok = clivus::loadFrame(path, r.frame);
+        r.ok = clivus::loadFrame(path, r.frame, frameIndex);
         return r;
     }));
     updateInfo("decoding…");
@@ -406,12 +417,13 @@ void MainWindow::showSeries(int index)
 void MainWindow::showSlice(int delta)
 {
     if (m_currentSeries < 0) return;
-    const auto& files = m_series[size_t(m_currentSeries)].files;
-    if (files.empty()) return;   // clamp() would give an upper bound of -1 here
+    const auto& series = m_series[size_t(m_currentSeries)];
+    const int total = series.totalFrames();
+    if (total <= 0) return;   // clamp() would give an upper bound of -1 here
     // Step from where the wheel last pointed, not from what is on screen, so a fast spin does not
     // keep restarting from the same slice.
     const int from = std::max(m_sliceInFlight ? m_desiredSlice : m_currentSlice, 0);
-    const int next = std::clamp(from + delta, 0, int(files.size()) - 1);
+    const int next = std::clamp(from + delta, 0, total - 1);
     if (next == m_desiredSlice && (m_sliceInFlight || next == m_currentSlice)) return;
     m_desiredSlice = next;
     pumpSlice();
@@ -421,15 +433,25 @@ void MainWindow::updateInfo(const QString& extra)
 {
     if (m_currentSeries < 0) return;
     const auto& s = m_series[size_t(m_currentSeries)];
+    const int total = s.totalFrames();
     const QString position = m_currentSlice < 0
-                                 ? QString("… / %1").arg(s.files.size())
-                                 : QString("%1 / %2").arg(m_currentSlice + 1).arg(s.files.size());
+                                 ? QString("… / %1").arg(total)
+                                 : QString("%1 / %2").arg(m_currentSlice + 1).arg(total);
+    // A slice inside a multi-frame object says which frame it is: "3 / 17" alone would hide that the
+    // viewer is walking a cine rather than a stack of files.
+    QString frameNote;
+    int fileIndex = 0, frameIndex = 0;
+    if (m_currentSlice >= 0 && s.locate(m_currentSlice, fileIndex, frameIndex)) {
+        const int frames = fileIndex < int(s.frameCounts.size()) ? s.frameCounts[size_t(fileIndex)] : 1;
+        if (frames > 1) frameNote = QString("   frame %1/%2").arg(frameIndex + 1).arg(frames);
+    }
     QString text = QString("%1 — %2  [%3]   %4   %5")
                        .arg(QString::fromStdString(s.patientName))
                        .arg(position)
                        .arg(QString::fromStdString(s.seriesDescription))
                        .arg(m_windowLevel)
                        .arg(m_timing);
+    text += frameNote;
     if (!extra.isEmpty()) text += "   " + extra;
     m_status->setText(text);
 }

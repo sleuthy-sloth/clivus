@@ -12,6 +12,11 @@ struct ImageFrame {
     std::vector<float> pixels;   // modality units, row-major, top-left origin
     float minValue = 0.0f;       // over non-padding pixels
     float maxValue = 0.0f;
+    // Which frame of the source object this is, and how many that object carries. A single-frame
+    // object is 0 of 1; a 15-frame RT Dose says 5 of 15. The scan reports the same count, so the
+    // slice browser can step through frames without opening the object first.
+    int frameIndex = 0;
+    int frameCount = 1;
     // MONOCHROME1: the file says high stored values are displayed dark. The flip happens in
     // render(), so pixels, min/max and the window numbers stay in modality units.
     bool invert = false;
