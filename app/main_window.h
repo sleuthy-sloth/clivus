@@ -15,6 +15,8 @@ class HelpWindow;
 class SliceBar;
 class WindowLevelBar;
 class WindowPresetBar;
+class QAction;
+class QActionGroup;
 class QLabel;
 class QListWidget;
 class QProgressBar;
@@ -32,6 +34,8 @@ public:
     void runBenchmark(int frames, int seriesRow = 0);
 
 private:
+    enum class ActiveTool { WindowLevel, Pan, Pointer };
+
     // Whatever a worker hands back carries the request it answers, so a result that arrives after
     // the user moved on is dropped instead of shown.
     struct ScanResult {
@@ -63,6 +67,7 @@ private:
     void setIdleProgress();
     void showManual();
     void showAbout();
+    void setActiveTool(ActiveTool tool);   // one source of truth: toolbar, menu, cursor, hint
 
     QListWidget* m_seriesList = nullptr;
     QSplitter* m_splitter = nullptr;
@@ -77,6 +82,14 @@ private:
     QProgressBar* m_progress = nullptr;
     QPushButton* m_cancel = nullptr;
     QTimer* m_scanTicker = nullptr;
+    // Roadmap 2.1/2.6: which tool the toolbar and menu are highlighting. Both drags always work;
+    // this only decides the cursor and the status hint, so the UI cannot put the canvas into a mode
+    // the user cannot get out of.
+    ActiveTool m_activeTool = ActiveTool::WindowLevel;
+    QActionGroup* m_toolGroup = nullptr;
+    QAction* m_windowAction = nullptr;
+    QAction* m_panAction = nullptr;
+    QAction* m_pointerAction = nullptr;
     bool m_showDiagnostics = false;   // session-only: timings go away when the app restarts
     std::vector<clivus::SeriesInfo> m_series;
     QString m_folder;

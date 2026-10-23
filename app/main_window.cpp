@@ -4,6 +4,7 @@
 #include "clivus/version.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QDir>
 #include <QFileDialog>
 #include <QIcon>
@@ -98,6 +99,10 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_canvas = new CanvasWidget(this);
+    // The gestures are fixed regardless of the highlighted tool, so they are stated once here
+    // (roadmap 2.1) instead of being implied by whichever action happens to be checked.
+    m_canvas->setToolTip("Left-drag = window/level · Right-drag = pan · Double-click or R = reset view "
+                         "· Wheel = slices · Ctrl+wheel = zoom");
     m_sliceBar = new SliceBar(this);
     m_windowBar = new WindowLevelBar(this);
     m_presetBar = new WindowPresetBar(this);
@@ -191,21 +196,39 @@ MainWindow::MainWindow(QWidget* parent)
     reset->setToolTip("Restore default zoom, pan and window/level (double-click or R on the canvas)");
     connect(reset, &QAction::triggered, m_canvas, &CanvasWidget::resetView);
 
-    auto* wl = new QAction("&Window/Level", this);
-    wl->setIcon(QIcon::fromTheme("contrast"));
-    wl->setToolTip("Drag with the LEFT mouse button on the canvas: horizontal = width, vertical = centre");
-    // The gesture already exists on the canvas; the action itself just points to it, so the control
-    // never pretends to be a command it is not.
-    connect(wl, &QAction::triggered, this, [this] {
-        statusBar()->showMessage("Drag with the LEFT mouse button on the canvas to adjust window/level", 4000);
-    });
+    // Tools (roadmap 2.1/2.6). Both gestures are always live on the canvas; these actions only say
+    // which one the UI is presenting, and they are checkable and exclusive so the toolbar, the menu and
+    // the cursor can never disagree about the active tool.
+    m_windowAction = new QAction("&Window/Level", this);
+    m_windowAction->setIcon(QIcon::fromTheme("contrast"));
+    m_windowAction->setToolTip("Window/level tool (cross cursor). Left-drag on the image: horizontal = "
+                               "width, vertical = centre. Right-drag still pans.");
+    m_windowAction->setCheckable(true);
+    m_windowAction->setChecked(true);
 
-    auto* pan = new QAction("&Pan", this);
-    pan->setIcon(QIcon::fromTheme("transform-move"));
-    pan->setToolTip("Drag with the RIGHT mouse button on the canvas to move the image");
-    connect(pan, &QAction::triggered, this, [this] {
-        statusBar()->showMessage("Drag with the RIGHT mouse button on the canvas to pan the image", 4000);
-    });
+    m_panAction = new QAction("&Pan", this);
+    m_panAction->setIcon(QIcon::fromTheme("transform-move"));
+    m_panAction->setToolTip("Pan tool (open-hand cursor). Right-drag on the image to move it; "
+                            "left-drag still adjusts window/level.");
+    m_panAction->setCheckable(true);
+
+    m_pointerAction = new QAction("&Pointer", this);
+    auto* pointer = m_pointerAction;
+    pointer->setIcon(QIcon::fromTheme("cursor-arrow"));
+    pointer->setToolTip("Pointer tool (arrow cursor), for looking without an active adjustment. Both "
+                        "drags keep working.");
+    pointer->setCheckable(true);
+
+    m_toolGroup = new QActionGroup(this);
+    m_toolGroup->setExclusive(true);
+    for (auto* a : {m_windowAction, m_panAction, pointer}) {
+        a->setActionGroup(m_toolGroup);
+        m_toolGroup->addAction(a);
+    }
+    connect(m_windowAction, &QAction::triggered, this,
+            [this] { setActiveTool(ActiveTool::WindowLevel); });
+    connect(m_panAction, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pan); });
+    connect(pointer, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pointer); });
 
     auto* sidebar = new QAction("&Series sidebar", this);
     sidebar->setToolTip("Show or hide the series browser");
@@ -248,6 +271,12 @@ MainWindow::MainWindow(QWidget* parent)
     view->addAction(sidebar);
     view->addSeparator();
     view->addAction(diagnostics);
+    view->addSeparator();
+    // The same QAction instances the toolbar shows, in one exclusive group (roadmap 6.3).
+    auto* tools = view->addMenu("&Tools");
+    tools->addAction(m_windowAction);
+    tools->addAction(m_panAction);
+    tools->addAction(pointer);
 
     auto* help = menuBar()->addMenu("&Help");
     help->addAction(manual);
@@ -258,7 +287,11 @@ MainWindow::MainWindow(QWidget* parent)
     toolbar->setMovable(false);
     toolbar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     toolbar->setIconSize(QSize(clivus::style::kIconSize, clivus::style::kIconSize));
-    for (auto* a : {open, fit, pan, wl, reset}) toolbar->addAction(a);
+    for (auto* a : {open, fit}) toolbar->addAction(a);
+    toolbar->addSeparator();
+    for (auto* a : {m_windowAction, m_panAction, pointer}) toolbar->addAction(a);   // exclusive tool set
+    toolbar->addSeparator();
+    for (auto* a : {reset}) toolbar->addAction(a);
 
     setMinimumSize(720, 480);   // narrower windows clip the toolbar and sidebar
     // Empty state (roadmap 1.6): what Clivus does, a prominent way in, and a route to the manual.
@@ -326,6 +359,37 @@ MainWindow::MainWindow(QWidget* parent)
                                .arg(fps, 0, 'f', 0);
                 updateInfo();
             });
+}
+
+// One place that knows the active tool. The checked action is already the single truth in the UI - this
+// mirrors it into the cursor and the one-line hint so the three cannot drift (roadmap 2.1/2.6).
+// Switching tools changes feedback only; it never disables a gesture, so the user cannot get stuck in a
+// mode that does not do what they expect.
+void MainWindow::setActiveTool(ActiveTool tool)
+{
+    m_activeTool = tool;
+    QString hint;
+    switch (tool) {
+    case ActiveTool::Pan:
+        if (!m_panAction->isChecked()) m_panAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::Pan);
+        hint = "Pan tool — right-drag on the image to move it (left-drag still adjusts window/level)";
+        break;
+    case ActiveTool::Pointer:
+        if (!m_pointerAction->isChecked()) m_pointerAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::Pointer);
+        hint = "Pointer tool — no adjustment highlighted; left-drag = window/level, right-drag = pan";
+        break;
+    case ActiveTool::WindowLevel:
+    default:
+        if (!m_windowAction->isChecked()) m_windowAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::WindowLevel);
+        hint = "Window/level tool — left-drag on the image: horizontal = width, vertical = centre "
+               "(right-drag still pans)";
+        break;
+    }
+    // Transient hint, not the persistent state line: the status bar keeps reporting the study.
+    statusBar()->showMessage(hint, 5000);
 }
 
 void MainWindow::openFolder(const QString& dir)

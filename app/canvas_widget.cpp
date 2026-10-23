@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "canvas_widget.h"
 
+#include <QCursor>
 #include <QDebug>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -15,6 +16,27 @@ CanvasWidget::CanvasWidget(QWidget* parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(320, 240);
+    setToolHint(ToolHint::WindowLevel);   // matches the default tool action the toolbar starts on
+}
+
+// Roadmap 2.6: the cursor says which tool is active. Cross for window/level, open hand for pan (the
+// gesture the hand describes), plain arrow when neither is highlighted. Both drags keep working in
+// every mode - the cursor is feedback, not a mode switch - which is why the tooltips spell out both
+// gestures rather than pretending the inactive one is unavailable.
+void CanvasWidget::setToolHint(ToolHint hint)
+{
+    switch (hint) {
+    case ToolHint::Pan:
+        setCursor(Qt::OpenHandCursor);
+        break;
+    case ToolHint::Pointer:
+        setCursor(Qt::ArrowCursor);
+        break;
+    case ToolHint::WindowLevel:
+    default:
+        setCursor(Qt::CrossCursor);
+        break;
+    }
 }
 
 void CanvasWidget::initializeGL()

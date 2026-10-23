@@ -17,6 +17,11 @@ class CanvasWidget : public QOpenGLWidget, protected QOpenGLFunctions {
 public:
     explicit CanvasWidget(QWidget* parent = nullptr);
 
+    // What the pointer should say about the active tool. Hint only: the gestures themselves are fixed
+    // (left-drag = window/level, right-drag = pan) and this never disables either of them.
+    enum class ToolHint { WindowLevel, Pan, Pointer };
+    void setToolHint(ToolHint hint);
+
     void setFrame(clivus::ImageFrame frame);   // resets window to the full dynamic range
     void resetView();
     void fitView();   // zoom back to 1.0 (already fit to the viewport), keep pan and window
