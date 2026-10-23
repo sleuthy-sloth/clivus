@@ -38,6 +38,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;   // roadmap 3.4: Escape in the search box
 
 private:
     enum class ActiveTool { WindowLevel, Pan, Pointer };

@@ -11,6 +11,8 @@
 #include <QImage>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QEvent>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenuBar>
@@ -114,6 +116,10 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesSearch->setPlaceholderText("Search series…");
     m_seriesSearch->setClearButtonEnabled(true);
     m_seriesSearch->setToolTip("Filter the series list by description or modality (Ctrl+F)");
+    // Roadmap 3.4: Escape inside the box is a two-step undo — first clear the query, then hand
+    // focus back to the list. Handled by an event filter rather than a shortcut so it can't fire
+    // while the user is in ANY other widget.
+    m_seriesSearch->installEventFilter(this);
     // Ctrl+F focus shortcut: QLineEdits carry no shortcuts of their own; the shortcut lives on a
     // window-level QAction that just puts keyboard focus into the box.
     auto* findSeries = new QAction(this);
@@ -224,9 +230,14 @@ MainWindow::MainWindow(QWidget* parent)
     // wired to the same thing (roadmap 6.3). Each action drives behaviour that already exists.
     auto* fit = new QAction("Fit &image", this);
     fit->setIcon(QIcon::fromTheme("zoom-fit-best"));
-    fit->setToolTip("Scale the image to fit the canvas (keeps the aspect ratio)");
+    fit->setToolTip("Scale the image to fit the canvas, keeping the aspect ratio (F)");
+    fit->setShortcut(Qt::Key_F);
     connect(fit, &QAction::triggered, m_canvas, &CanvasWidget::fitView);
 
+    // Deliberately no application shortcut on Reset view: the canvas already consumes R
+    // (canvas_widget.cpp keyPressEvent) while it has focus, and a second handler at window scope
+    // would make the boundary between "canvas focused" and "anywhere" ambiguous (roadmap 3.4).
+    // Keyboard users reach reset from this menu via its mnemonic, or R on the canvas, or double-click.
     auto* reset = new QAction("&Reset view", this);
     reset->setIcon(QIcon::fromTheme("view-refresh"));
     reset->setToolTip("Restore default zoom, pan and window/level (double-click or R on the canvas)");
@@ -267,9 +278,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(pointer, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pointer); });
 
     auto* sidebar = new QAction("&Series sidebar", this);
-    sidebar->setToolTip("Show or hide the series browser");
+    sidebar->setToolTip("Show or hide the series browser (Ctrl+B)");
     sidebar->setCheckable(true);
     sidebar->setChecked(true);
+    sidebar->setShortcut(QKeySequence("Ctrl+B"));
     connect(sidebar, &QAction::toggled, this, [this](bool on) {
         m_seriesList->setVisible(on);
         // Give the reclaimed space to the canvas: the image is the point.
@@ -280,8 +292,9 @@ MainWindow::MainWindow(QWidget* parent)
     // nothing is persisted, so a fresh session starts clean.
     auto* diagnostics = new QAction("Show &diagnostics", this);
     m_diagnosticsAction = diagnostics;   // kept for save/restore/reset of layout (roadmap 3.1)
-    diagnostics->setToolTip("Show render timing details in the image overlay (remembered across sessions)");
+    diagnostics->setToolTip("Show render timing details in the image overlay (remembered across sessions) (Ctrl+D)");
     diagnostics->setCheckable(true);
+    diagnostics->setShortcut(QKeySequence("Ctrl+D"));
     connect(diagnostics, &QAction::toggled, this, [this](bool on) {
         m_showDiagnostics = on;
         updateInfo();
@@ -381,6 +394,13 @@ MainWindow::MainWindow(QWidget* parent)
     restoreLayout();   // roadmap 3.1: geometry, splitter, sidebar and diagnostics from QSettings
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
+    // Roadmap 3.4: keyboard navigation — arrows move currentRow (loading as it goes, since
+    // currentRowChanged drives showSeries), and Return/Enter activates the row under the caret even
+    // when it is already current (e.g. after tabbing in with the mouse having selected elsewhere).
+    connect(m_seriesList, &QListWidget::activated, this, [this](const QModelIndex& index) {
+        if (index.isValid() && m_seriesList->currentRow() != index.row())
+            m_seriesList->setCurrentRow(index.row());
+    });
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
     connect(m_sliceBar, &SliceBar::sliceRequested, this, &MainWindow::goToSlice);
     // The canvas is the one that changes values by dragging; it reports them here, this is where they
@@ -411,6 +431,25 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     saveLayout();   // roadmap 3.1: the window arrangement survives a restart
     QMainWindow::closeEvent(event);
+}
+
+// Roadmap 3.4: the search box reacts to Escape before QLineEdit's own handling, so the user can
+// back out of filtering without no-touching the mouse: first press clears the query, further
+// presses return focus to the series list, where arrows continue.
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_seriesSearch && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape) {
+            if (!m_seriesSearch->text().isEmpty()) {
+                m_seriesSearch->clear();
+            } else {
+                m_seriesList->setFocus();
+            }
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 // Roadmap 3.1. Only layout is written here, and only the four keys in settings_names.h. Recent
