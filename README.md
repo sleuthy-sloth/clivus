@@ -67,7 +67,7 @@ Real, working, test-backed:
   JPEG 2000 where the DCMTK build carries it — with every lossless codec asserted
   pixel-identical to ground truth.
 - **Load volumes in physically correct order.** Sorted by position along the
-  scan normal, spacing from real geometry, markers-tested against shuffled
+  scan normal, spacing from real geometry, unit-tested against shuffled
   filenames and `InstanceNumber`.
 
 The pipeline in one sentence: point it at a folder, click a series, drag the
