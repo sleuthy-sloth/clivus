@@ -33,6 +33,9 @@
 #include <QEventLoop>
 #include <algorithm>
 #include <cstdio>
+#include <sqlite3.h>
+#include <system_error>
+#include <filesystem>
 #include <functional>
 
 #define CHECK(cond)                                                          \
@@ -134,51 +137,57 @@ int main(int argc, char** argv)
                           15000));
         }
 
-        // Pass 2: poison in place. CT_small and MR_small are left alone so readable series still
-        // exist; every other object's body is zeroed — SAME byte count, mtime restored afterwards,
-        // so the fingerprint the index keys on does not change: count · newest-mtime · total bytes.
+        // Pass 2: poison the copy so that at least one cached row FAILS TO DECODE on every
+        // platform. Corrupting bytes is not enough — parsers disagree about which garbage they
+        // forgive (MSVC decoded a zeroed body as valid black frames), so the dose object is
+        // DELETED outright: the cached row still points at it, and loadFrame fails on a missing
+        // file everywhere. The scan index is then told the folder is exactly as it last saw it:
+        // the current fingerprint (the same formula index_store.cpp uses) is written into the
+        // meta table, so the cache serves the passed scan rather than rescanning and dropping the
+        // now-missing series. This is the injection point the roadmap's recovery path targets:
+        // broken-at-decode-time data behind an intact-looking scan.
         namespace fs = std::filesystem;
-        int poisoned = 0;
-        for (const QString& f : names) {
-            if (f == QStringLiteral("CT_small.dcm") || f == QStringLiteral("MR_small.dcm")) continue;
-            const fs::path path = (copy + QLatin1Char('/') + f).toStdString();
-            const auto originalMtime = fs::last_write_time(path);
-            QFile file(copy + QLatin1Char('/') + f);
-            CHECK(file.open(QIODevice::ReadWrite));
-            const qint64 size = file.size();
-            const QByteArray zeros(int(size), char(0));
-            file.seek(0);
-            CHECK(file.write(zeros) == size);
-            file.close();
-            fs::last_write_time(path, originalMtime);
-            ++poisoned;
-        }
-        CHECK(poisoned > 0);
+        const QString dosePath = copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm");
+        QFile dose(dosePath);
+        CHECK(dose.open(QIODevice::ReadOnly));
+        const qint64 doseSize = dose.size();
+        dose.close();
+        CHECK(QFile::remove(dosePath));
 
-        // Deterministic DECODE-time failure on every platform: the cached row points at
-        // rtdose_rle.dcm, which is DELETED and replaced by a different file of the same byte size
-        // with an older mtime. The fingerprint the index keys on (count · newest · total bytes)
-        // therefore still matches — the cached scan serves the intact-looking row — and then
-        // loadFrame hits a missing/unreadable file, which no platform can recover on its own.
+        // Recompute the fingerprint exactly the way fingerprintOf() does, and store it, so
+        // IndexStore::load() considers the folder unchanged.
         {
-            const QString dosePath = copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm");
-            QFile dose(dosePath);
-            CHECK(dose.open(QIODevice::ReadOnly));
-            const qint64 size = dose.size();
-            dose.close();
-            QString filler = copy + QLatin1Char('/') + QStringLiteral("filler.dcm");
-            CHECK(QFile::remove(dosePath));
-            QFile fillerFile(filler);
-            CHECK(fillerFile.open(QIODevice::WriteOnly));
-            CHECK(fillerFile.write(QByteArray(int(size), char(0))) == size);
-            fillerFile.close();
-            // Put the folder's mtime ordering back where it was: filler must not become the
-            // "newest" the fingerprint is derived from, or the cache would miss.
-            namespace fs = std::filesystem;
-            const auto sourceMtime = fs::last_write_time(
-                (QString(argv[1]) + QLatin1Char('/') + QStringLiteral("CT_small.dcm")).toStdString());
-            fs::last_write_time((copy + QLatin1Char('/') + QStringLiteral("filler.dcm")).toStdString(),
-                                sourceMtime);
+            size_t count = 0;
+            long long newest = 0;
+            long long bytes = 0;
+            std::error_code ec;
+            fs::recursive_directory_iterator it(copy.toStdString(),
+                                                fs::directory_options::skip_permission_denied, ec);
+            for (const fs::recursive_directory_iterator end; it != end; it.increment(ec)) {
+                std::error_code e;
+                if (!it->is_regular_file(e)) continue;
+                const std::string name = it->path().filename().string();
+                if (name.rfind(".clivus-index.sqlite", 0) == 0) continue;
+                ++count;
+                const auto stamp = fs::last_write_time(it->path(), e);
+                if (!e) newest = std::max(newest, (long long)stamp.time_since_epoch().count());
+                const auto size = fs::file_size(it->path(), e);
+                if (!e) bytes += (long long)size;
+            }
+            CHECK(count > 0);
+            (void)doseSize;
+            sqlite3* db = nullptr;
+            const std::string dbPath = copy.toStdString() + "/.clivus-index.sqlite";
+            CHECK(sqlite3_open_v2(dbPath.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK);
+            const std::string fp = std::to_string(count) + ":" + std::to_string(newest) + ":"
+                                   + std::to_string(bytes);
+            const char* sql = "INSERT OR REPLACE INTO meta(key, value) VALUES('fingerprint', ?)";
+            sqlite3_stmt* st = nullptr;
+            CHECK(sqlite3_prepare_v2(db, sql, -1, &st, nullptr) == SQLITE_OK);
+            sqlite3_bind_text(st, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+            CHECK(sqlite3_step(st) == SQLITE_DONE);
+            sqlite3_finalize(st);
+            sqlite3_close(db);
         }
 
         // Reopen: the cached list must come back intact-looking, then decode failures must be
