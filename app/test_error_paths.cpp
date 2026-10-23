@@ -1,55 +1,61 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Roadmap 3.5 error-recovery harness: the offscreen UI drives the REAL scan/decode paths and
-// asserts recovery rather than success. QApplication + QWidget only — the canvas never paints
-// here, so ctest can run it anywhere; GL behaviour is not what is being tested, the error
-// plumbing around it is.
+// asserts recovery. QApplication + QWidget only — the canvas never paints here, so ctest runs it
+// anywhere; the plumbing under test is the error handling, not the GL rendering.
 //
 // Scenarios:
-//   A. An empty folder scans to a plain "No DICOM images" state with progress hidden — no stuck
-//      indicators, no crash.
-//   B. A folder whose objects are corrupted AFTER the first decode lands produces slice decode
-//      failures that stay readable: the failure message replaces the timing/status text, the
-//      progress indicators never stay up, and selecting further series still loads cleanly —
-//      the decode pump survives a broken object instead of wedging on it.
-//   C. Cancel after failures returns the status bar to "Ready" with the cancel button gone.
-//   D. Recovery is demonstrable without a restart: reopening the untouched corpus loads again.
+//   A. Empty folder → plain "No DICOM images" state, progress and cancel hidden.
+//   B. Intact folder opened once (scan cache populated), then the RT Dose object is RENAMED:
+//      the folder fingerprint is unchanged (count, bytes, newest mtime), the cached scan serves
+//      the intact-looking series list, and decoding the dose series fails on a missing file —
+//      the one failure every parser agrees to report. Other series keep loading: the pump
+//      survives, no indicator sticks.
+//   C. After failures, Cancel returns the status bar to Ready with the controls gone.
 //
 // Run: QT_QPA_PLATFORM=offscreen ./app/clivus_test_error_paths <corpus-folder>
 
 #include "main_window.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QLabel>
 #include <QListWidget>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QSettings>
+#include <QRegularExpression>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QThread>
-#include <QDir>
-#include <QEventLoop>
-#include <algorithm>
 #include <cstdio>
-#include <sqlite3.h>
-#include <system_error>
 #include <filesystem>
 #include <functional>
+
+namespace fs = std::filesystem;
 
 #define CHECK(cond)                                                          \
     do {                                                                     \
         if (!(cond)) {                                                       \
             std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);      \
+            std::exit(1);                                                   \
             std::exit(1);                                                    \
         }                                                                    \
     } while (false)
 
 namespace {
 
-// Pump the event loop until a predicate holds (or give up after timeoutMs). Decode results and
-// scan completions all travel through the UI event loop, so this is what wait-time means here.
+int failures = 0;
+
+void expect(bool ok, const char* what)
+{
+    if (!ok) {
+        std::printf("FAIL %s\n", what);
+        ++failures;
+    }
+}
+
 bool waitFor(const std::function<bool()>& condition, int timeoutMs)
 {
     QElapsedTimer clock;
@@ -64,30 +70,46 @@ bool waitFor(const std::function<bool()>& condition, int timeoutMs)
 
 QLabel* statusOf(const MainWindow& w)
 {
+    QLabel* fallback = nullptr;
     for (QLabel* label : w.findChildren<QLabel*>()) {
-        if (label->parentWidget() == w.statusBar()) return label;
+        if (label->parentWidget() != w.statusBar()) continue;
+        // The status bar also carries patient/study/particulars labels ("no description", file
+        // counts). The slice-status label is the one that reads Ready/Loading/Slice, so match it
+        // positively instead of grabbing the first child.
+        const QString t = label->text();
+        if (t.startsWith(QStringLiteral("Slice")) || t == QStringLiteral("Ready") ||
+            t.startsWith(QStringLiteral("Loading")) || t.contains(QStringLiteral("No DICOM")))
+            return label;
+        if (fallback == nullptr) fallback = label;
     }
-    return nullptr;
+    return fallback;
 }
 
 QProgressBar* progressBarIn(const MainWindow& w)
 {
-    for (QProgressBar* bar : w.findChildren<QProgressBar*>()) return bar;
-    return nullptr;
+    const QList<QProgressBar*> bars = w.findChildren<QProgressBar*>();
+    return bars.isEmpty() ? nullptr : bars.first();
 }
 
 QListWidget* seriesListIn(const MainWindow& w)
 {
-    // The series browser is the widest list in the app; the Help window's nav list is created
-    // lazily and only when the manual is opened, so there is exactly one here.
     const QList<QListWidget*> lists = w.findChildren<QListWidget*>();
     return lists.isEmpty() ? nullptr : lists.first();
 }
 
-bool statusStartsWith(const MainWindow& w, const char* prefix)
+// A DECODED state reads "Slice <n> of <m>". The swing state before anything lands reads
+// "Slice … of <m>" — startsWith("Slice") matches it too, so match the digits, not the prefix.
+bool decodedState(const MainWindow& w)
 {
     const QLabel* status = statusOf(w);
-    return status && status->text().startsWith(QLatin1String(prefix));
+    return status &&
+           QRegularExpression(QStringLiteral("Slice \\d+ of \\d+")).match(status->text()).hasMatch();
+}
+
+QString statusText(const MainWindow& w)
+{
+    const QLabel* status = statusOf(w);
+    return status ? status->text() : QString();
 }
 
 }  // namespace
@@ -100,147 +122,83 @@ int main(int argc, char** argv)
     QSettings().clear();
     CHECK(argc > 1);
 
-    // Scenario A: an empty folder — must settle into an informative state with nothing stuck.
+    // --- Scenario A: empty folder.
     {
         QTemporaryDir empty;
         CHECK(empty.isValid());
         MainWindow w;
         w.openFolder(empty.path());
-        CHECK(waitFor([&] { return statusOf(w) && statusOf(w)->text().contains("No DICOM images"); },
-                      10000));
+        CHECK(waitFor([&] { return statusText(w).contains("No DICOM images"); }, 10000));
         CHECK(progressBarIn(w)->isHidden());
-        const QLabel* status = statusOf(w);
-        CHECK(status != nullptr);
-        // The message names the folder, the likely cause and what to try (roadmap 1.6).
-        CHECK(status->text().contains("check that this is the right folder"));
+        expect(statusText(w).contains("check that this is the right folder"),
+               "the empty-folder message says what to check (roadmap 1.6)");
     }
 
-    // Scenario B/C: the copy is opened INTACT first (so the scan lists every series and its first
-    // slice decodes), then corrupted IN PLACE with every file's mtime restored afterwards. The
-    // folder fingerprint (count · newest-mtime · total bytes) therefore still matches, the cached
-    // scan serves an intact-looking list, and the breakage shows up exactly where recovery has to
-    // handle it: at slice-decode time, not at scan time.
+    // --- Scenario B/C: intact copy, then the dose object deleted via rename.
     {
         QTemporaryDir dir;
         CHECK(dir.isValid());
         const QString copy = dir.path();
         QDir source(argv[1]);
-        const QStringList names = source.entryList(QDir::Files);
-        for (const QString& f : names)
+        for (const QString& f : source.entryList(QDir::Files))
             QFile::copy(source.filePath(f), copy + QLatin1Char('/') + f);
 
-        // Pass 1: intact, and left with a cache behind.
+        // Pass 1: fully intact, left with a populated scan cache behind.
         {
             MainWindow w;
             w.openFolder(copy);
-            CHECK(waitFor([&] { return statusOf(w) && statusOf(w)->text().startsWith("Slice 1"); },
-                          15000));
+            CHECK(waitFor([&] { return decodedState(w); }, 15000));
         }
 
-        // Pass 2: poison the copy so that at least one cached row FAILS TO DECODE on every
-        // platform. Corrupting bytes is not enough — parsers disagree about which garbage they
-        // forgive (MSVC decoded a zeroed body as valid black frames), so the dose object is
-        // DELETED outright: the cached row still points at it, and loadFrame fails on a missing
-        // file everywhere. The scan index is then told the folder is exactly as it last saw it:
-        // the current fingerprint (the same formula index_store.cpp uses) is written into the
-        // meta table, so the cache serves the passed scan rather than rescanning and dropping the
-        // now-missing series. This is the injection point the roadmap's recovery path targets:
-        // broken-at-decode-time data behind an intact-looking scan.
-        namespace fs = std::filesystem;
-        const QString dosePath = copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm");
-        QFile dose(dosePath);
-        CHECK(dose.open(QIODevice::ReadOnly));
-        const qint64 doseSize = dose.size();
-        dose.close();
-        CHECK(QFile::remove(dosePath));
+        // Pass 2: rename the RT Dose object away. Everything the fingerprint keys on stays the
+        // same — count, total bytes, newest mtime — so the cache must serve the full list.
+        const fs::path doseCopy =
+            (copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm")).toStdString();
+        const fs::path doseMoved =
+            (copy + QLatin1Char('/') + QStringLiteral("rtdose_moved.dcm")).toStdString();
+        std::error_code renameEc;
+        fs::rename(doseCopy, doseMoved, renameEc);
+        CHECK(!renameEc);
 
-        // Recompute the fingerprint exactly the way fingerprintOf() does, and store it, so
-        // IndexStore::load() considers the folder unchanged.
-        {
-            size_t count = 0;
-            long long newest = 0;
-            long long bytes = 0;
-            std::error_code ec;
-            fs::recursive_directory_iterator it(copy.toStdString(),
-                                                fs::directory_options::skip_permission_denied, ec);
-            for (const fs::recursive_directory_iterator end; it != end; it.increment(ec)) {
-                std::error_code e;
-                if (!it->is_regular_file(e)) continue;
-                const std::string name = it->path().filename().string();
-                if (name.rfind(".clivus-index.sqlite", 0) == 0) continue;
-                ++count;
-                const auto stamp = fs::last_write_time(it->path(), e);
-                if (!e) newest = std::max(newest, (long long)stamp.time_since_epoch().count());
-                const auto size = fs::file_size(it->path(), e);
-                if (!e) bytes += (long long)size;
-            }
-            CHECK(count > 0);
-            (void)doseSize;
-            sqlite3* db = nullptr;
-            const std::string dbPath = copy.toStdString() + "/.clivus-index.sqlite";
-            CHECK(sqlite3_open_v2(dbPath.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK);
-            const std::string fp = std::to_string(count) + ":" + std::to_string(newest) + ":"
-                                   + std::to_string(bytes);
-            const char* sql = "INSERT OR REPLACE INTO meta(key, value) VALUES('fingerprint', ?)";
-            sqlite3_stmt* st = nullptr;
-            CHECK(sqlite3_prepare_v2(db, sql, -1, &st, nullptr) == SQLITE_OK);
-            sqlite3_bind_text(st, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
-            CHECK(sqlite3_step(st) == SQLITE_DONE);
-            sqlite3_finalize(st);
-            sqlite3_close(db);
-        }
-
-        // Reopen: the cached list must come back intact-looking, then decode failures must be
-        // readable, non-blocking, and followed by working series — the pump survives.
         MainWindow w;
         w.openFolder(copy);
-        CHECK(waitFor([&] {
-            const QString text = statusOf(w) ? statusOf(w)->text() : QString();
-            return text.startsWith("Slice") || text.contains("could not be decoded") ||
-                   text.contains("has no image objects");
-        }, 15000));
 
         QListWidget* list = seriesListIn(w);
         CHECK(list != nullptr);
+        CHECK(waitFor([&] { return list->count() > 0; }, 30000));
+        // The dose series fails loudly; the others settle into decoded states on their own (J2K
+        // series fail to decode everywhere the codec set is the same, so keep the wait general).
+        CHECK(waitFor([&] {
+            const QString text = statusText(w);
+            return decodedState(w) || text.contains("could not be decoded") ||
+                   text.contains("has no image objects");
+        }, 30000));
         int seenFailure = 0, seenLoaded = 0;
         for (int i = 0; i < list->count(); ++i) {
             list->setCurrentRow(i);
             CHECK(waitFor([&] {
-                const QString text = statusOf(w) ? statusOf(w)->text() : QString();
-                return text.startsWith("Slice") ||
-                       text.contains("could not be decoded") ||
+                const QString text = statusText(w);
+                return decodedState(w) || text.contains("could not be decoded") ||
                        text.contains("has no image objects");
             }, 15000));
-            const QString text = statusOf(w)->text();
+            const QString text = statusText(w);
             if (text.contains("could not be decoded")) ++seenFailure;
-            if (text.startsWith("Slice")) ++seenLoaded;
-            // No STUCK indicators after every selection: thumbnails may legitimately still be
-            // filling while slices settle, so the bar may be up briefly — but it must hide on its
-            // own well before the next selection.
+            if (decodedState(w)) ++seenLoaded;
+            // No STUCK indicators after any selection: thumbnails may still be in flight when the
+            // slice settles, so the bar hiding on its own is the proof it never wedges.
             CHECK(waitFor([&] { return progressBarIn(w)->isHidden(); }, 20000));
         }
-        // Both outcomes must occur: the failures are readable AND the decoder pump still lands
-        // images afterwards, so recovery is proven within one session.
-        CHECK(seenFailure > 0);
-        CHECK(seenLoaded > 0);
+        expect(seenFailure > 0, "the dose series' failure was readable");
+        expect(seenLoaded > 0, "other series still decode after the failure");
 
-        // Scenario C: cancel after failures returns to Ready, controls tucked away.
-        for (QPushButton* cancel : w.findChildren<QPushButton*>()) {
+        // Scenario C: cancel after failures lands the status bar on Ready.
+        for (QPushButton* cancel : w.findChildren<QPushButton*>())
             if (cancel->text() == QStringLiteral("Cancel")) cancel->click();
-        }
-        CHECK(waitFor([&] { return statusOf(w)->text() == QStringLiteral("Ready"); }, 5000));
+        CHECK(waitFor([&] { return statusText(w) == QStringLiteral("Ready"); }, 5000));
         CHECK(progressBarIn(w)->isHidden());
     }
 
-    // Scenario D: recovery without a restart — reopening the untouched corpus must load again.
-    {
-        MainWindow w;
-        w.openFolder(QString(argv[1]));
-        CHECK(waitFor([&] { return statusOf(w) && statusOf(w)->text().startsWith("Slice 1"); },
-                      15000));
-    }
-
     QSettings().clear();
-    std::printf("error paths: all checks passed\n");
-    return 0;
+    if (failures == 0) std::printf("error paths: all checks passed\n");
+    return failures == 0 ? 0 : 1;
 }

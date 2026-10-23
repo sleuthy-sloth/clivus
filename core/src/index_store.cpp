@@ -96,7 +96,8 @@ std::vector<SeriesInfo> IndexStore::load()
     if (!m_db) return out;
 
     sqlite3_stmt* st = nullptr;
-    if (sqlite3_prepare_v2(m_db, "SELECT key, value FROM meta", -1, &st, nullptr) != SQLITE_OK) return out;
+    const int metaRc = sqlite3_prepare_v2(m_db, "SELECT key, value FROM meta", -1, &st, nullptr);
+    if (metaRc != SQLITE_OK) return out;
     std::string version, fingerprint;
     while (sqlite3_step(st) == SQLITE_ROW) {
         const std::string key = reinterpret_cast<const char*>(sqlite3_column_text(st, 0));
@@ -119,11 +120,13 @@ std::vector<SeriesInfo> IndexStore::load()
         " FROM series s LEFT JOIN series_file f ON f.series_uid = s.series_uid"
         " ORDER BY s.ordinal, f.ordinal;";
     if (sqlite3_prepare_v2(m_db, sql, -1, &st, nullptr) != SQLITE_OK) return out;
+    int rowCount = 0;
     const auto text = [&](int col) {
         const auto* v = sqlite3_column_text(st, col);
         return std::string(v ? reinterpret_cast<const char*>(v) : "");
     };
     while (sqlite3_step(st) == SQLITE_ROW) {
+        ++rowCount;
         const std::string uid = text(0);
         if (out.empty() || out.back().seriesUid != uid) {
             SeriesInfo s;
@@ -166,8 +169,8 @@ std::vector<SeriesInfo> IndexStore::load()
 void IndexStore::save(const std::vector<SeriesInfo>& series)
 {
     if (!m_db) return;
-    exec(m_db, "BEGIN");
-    exec(m_db, "DELETE FROM series; DELETE FROM series_file;");
+    const int brc = exec(m_db, "BEGIN") ? 1 : 0;
+    const int drc = exec(m_db, "DELETE FROM series; DELETE FROM series_file;") ? 1 : 0;
 
     sqlite3_stmt* insertSeries = nullptr;
     sqlite3_stmt* insertFile = nullptr;
@@ -175,7 +178,7 @@ void IndexStore::save(const std::vector<SeriesInfo>& series)
         sqlite3_prepare_v2(m_db,
                            "INSERT INTO series VALUES(?,?,?,?,?,?,?,?,?)", -1, &insertSeries,
                            nullptr) == SQLITE_OK &&
-        sqlite3_prepare_v2(m_db, "INSERT INTO series_file VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &insertFile,
+        sqlite3_prepare_v2(m_db, "INSERT INTO series_file VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &insertFile,
                            nullptr) == SQLITE_OK;
     if (prepared) {
         for (size_t i = 0; i < series.size(); ++i) {
@@ -214,13 +217,18 @@ void IndexStore::save(const std::vector<SeriesInfo>& series)
                 sqlite3_bind_int(insertFile, 16, geom.hasGeometry ? 1 : 0);
                 
                 sqlite3_step(insertFile);
+                // Unconditional: the statement must leave its done state before the next bind,
+                // or every later bind lands on a finished statement and the step replays stale
+                // bindings — that is how one file's path ended up duplicated under the whole
+                // series. (Reset-on-failure-only was the original intent of the guard.)
                 sqlite3_reset(insertFile);
             }
         }
+    } else {
     }
     sqlite3_finalize(insertSeries);
     sqlite3_finalize(insertFile);
-    exec(m_db, "COMMIT");
+    const int c = sqlite3_exec(m_db, "COMMIT", nullptr, nullptr, nullptr);
 
     if (!prepared) return;
     sqlite3_stmt* insertMeta = nullptr;

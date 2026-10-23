@@ -746,6 +746,7 @@ void MainWindow::sliceFinished()
         m_status->setText("This slice could not be decoded — the file may be unsupported or "
                           "damaged. Try another slice or series; the rest of the application "
                           "remains usable.");
+        m_failedSlice = r.index;
         // Roadmap 3.5: a failed decode must not retry itself. Only chase a NEW target: re-pumping
         // the same index would spin the decode pool forever on a permanently broken file, and
         // pumpSlice() refuses an index the previous attempt failed on (m_failedSlice), so the next
@@ -998,6 +999,10 @@ void MainWindow::setWindowLevel(double center, double width)
 void MainWindow::updateInfo(const QString& extra)
 {
     if (m_currentSeries < 0) return;
+    // Roadmap 3.5: while a slice's failure is the current state, its message IS the status — a
+    // metadata refresh (thumbnails finishing, a diagnostics toggle, a window echo) must not
+    // overwrite it with the neutral swing text, or the error the user reads disappears.
+    if (m_failedSlice == m_desiredSlice && m_desiredSlice >= 0) return;
     const auto& s = m_series[size_t(m_currentSeries)];
     const int total = s.totalFrames();
     const QString position = m_currentSlice < 0
@@ -1021,6 +1026,29 @@ void MainWindow::updateInfo(const QString& extra)
     if (!s.modality.empty()) left << QString::fromStdString(s.modality);
     if (s.width > 0 && s.height > 0) left << QString("%1 × %2").arg(s.width).arg(s.height);
     left << position + frameNote;
+    
+    // Add geometry info when available
+    if (s.hasGeometry() && m_currentSlice >= 0 && fileIndex >= 0 && fileIndex < int(s.sliceGeometry.size())) {
+        const auto& geom = s.sliceGeometry[size_t(fileIndex)];
+        if (geom.hasGeometry) {
+            std::array<double, 6> iop = {geom.orientRowX, geom.orientRowY, geom.orientRowZ,
+                                          geom.orientColX, geom.orientColY, geom.orientColZ};
+            std::string orientLabel = clivus::orientationLabel(iop);
+            if (!orientLabel.empty()) {
+                left << QString::fromStdString(orientLabel);
+            }
+            // Position along the slice normal. Shown relative to the first slice of the series
+            // (physical mm; a real position label of a world-coordinate dot would be numerically
+            // correct but meaningless to a human). Only when the geometry is genuinely there.
+            auto alongDists = s.alongDistances();
+            if (fileIndex < int(alongDists.size())) {
+                const double rel = alongDists[size_t(fileIndex)] - alongDists.front();
+                left << QString("slice position %+1 mm (rel. to first slice)")
+                            .arg(rel, 0, 'f', 1);
+            }
+        }
+    }
+    
     if (!extra.isEmpty()) left << extra;
 
     QString right;
