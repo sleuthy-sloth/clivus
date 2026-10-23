@@ -56,24 +56,22 @@ roadmap instead of a guess.
 
 ## What Clivus does today
 
-Real, working, test-backed. The state you get right after opening a folder, with
-nothing loaded:
+![Clivus — the series browser, slice navigation, window/level presets and the canvas in one dark, restrained workspace](docs/img/clivus-windows.png)
 
-![Clivus with no study loaded — empty state, then two series loaded: chest CT and head CT with window/level and live fps in the status bar](docs/img/clivus-windows.png)
+Real, working, test-backed:
 
-Left to right above: the empty state that greets you (`Ctrl+O` does the rest),
-then a chest CT and a head CT loaded — series browser on the left, canvas centre,
-and the point of the whole spike in the bottom-right corner: **window 0.42 ms /
-paint 0.45 ms at 58 fps, live, while you drag the window across the image.**
-
-- **Browse a folder like a study.** Point it at DICOM files; get a series list
-  with thumbnails, wheel-to-scroll, pan, zoom, and live frame timings in the
-  status bar.
+- **Browse a folder like a study** — series list with thumbnails and metadata lines
 - **Window/level with the Horos gesture.** Left-drag widens/centres; the maths is
   the DICOM linear VOI LUT, not an approximation of it.
-- **Decode nearly everything's pixels.** Explicit-VR LE, RLE, JPEG, JPEG-LS, and
-  JPEG 2000 where the DCMTK build carries it — with every lossless codec asserted
-  pixel-identical to ground truth.
+- **Decode nearly everything's pixels — including colour.** Explicit-VR LE, RLE,
+  JPEG, JPEG-LS, and JPEG 2000 where the DCMTK build carries it, plus RGB and
+  YBR_FULL colour photometrics (planar variants converted by DCMTK, shown without
+  windowing, as the DICOM standard prescribes) — with every lossless codec
+  asserted pixel-identical to ground truth.
+- **Browse whole multi-frame objects.** Multi-frame CT/MR and 15-frame RT Dose
+  objects page through slice by slice, not frozen on frame 0.
+- **Real dose units for RT objects.** DoseGridScaling is applied where
+  RescaleSlope is absent, so an RT Dose reads in Gy instead of raw stored values.
 - **Load volumes in physically correct order.** Sorted by position along the
   scan normal, spacing from real geometry, unit-tested against shuffled
   filenames and `InstanceNumber`.
@@ -81,11 +79,15 @@ paint 0.45 ms at 58 fps, live, while you drag the window across the image.**
 The pipeline in one sentence: point it at a folder, click a series, drag the
 window, watch 60 fps.
 
-The daily interactions — window/level drag on a lung-window chest CT, scrolling
-through a head series, zoom-and-pan on vessels, and switching modalities to MR
-with different window defaults:
+The daily interactions — window/level drag, slice browsing, zoom and pan, and
+switching modalities with different window defaults:
 
-![Clivus interactions: window/level drag, slice browsing, zoom and pan, multi-series MR selection — each panel with its live timing readout](docs/img/clivus-interactions.png)
+![Clivus — window/level, slice browsing, zoom and pan, multi-series selection](docs/img/clivus-interactions.png)
+
+Where the interface is going next — the working design sheets for the series
+browser groups, the window/level panel, diagnostics, preferences and the manual:
+
+![Clivus design sheets: main viewer, series browser, presets, in-app manual, loading states, overlays, shortcuts, preferences, error handling, empty state, diagnostics, About](docs/img/clivus-design.png)
 
 ## Fidelity: every supported syntax must prove itself
 
@@ -189,7 +191,10 @@ Two orders of magnitude under budget.
    own route, which rejects valid objects such as 32-bit RLE RT Dose — one code
    path for every file.
 4. **32-bit multi-frame objects** hand back the whole frame stack in one buffer;
-   the loader clamps to `width*height` (frame 0) rather than assuming one frame.
+   the loader treats it as a slice stack, so every frame is browsable — frame 0
+   is no longer the only one that exists. (A documented corner: non-linear
+   Modality/VOI LUT Sequences are decoded as stored values, with no transform —
+   see `core/include/clivus/image_frame.h`; PALETTE COLOR is the same status.)
 
 ## Volume loading
 
@@ -226,10 +231,13 @@ strips `NDEBUG` for test targets — without that, the CI suite proved nothing.
 
 - **In progress:** off-thread scan/thumbnail/slice decode with progress and
   cancel; `glTexSubImage2D` on the drag path; a full-header fallback in the scan
-  for objects whose meta blocks push `PixelData` past the fast path.
-- **Then:** colour images, multi-frame, presentation LUTs; `DoseGridScaling`;
-  window/level parity tests against Horos; codec-registered DCMTK on macOS for
-  JPEG 2000.
+  (compiled, on a branch, pending a real-GPU bench).
+- **Shipped since the spike:** multi-frame browsing; colour photometrics
+  (RGB/YBR_FULL, planar converted); MODALITY/IDENTITY LUT handling; RT Dose dose
+  units.
+- **Then:** PALETTE COLOR; non-linear LUT Sequences; window/level parity tests
+  against Horos; a vendored DCMTK with JPEG 2000 on macOS (bots can't decode what
+  their build lacks — today only Windows CI exercises J2K).
 - **v1:** VTK / MPR / 3D with `QVTKOpenGLNativeWidget` in the real viewer.
 - **Not planned for v1:** PACS networking, measurement tools, plugin ABI.
 - **Always out:** no AGPL code of any kind in this tree; the AGPL content that
