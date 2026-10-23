@@ -17,6 +17,8 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScreen>
+#include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -243,7 +245,8 @@ MainWindow::MainWindow(QWidget* parent)
     // Roadmap 1.5: timings are development information, not primary UI. Session-only by design —
     // nothing is persisted, so a fresh session starts clean.
     auto* diagnostics = new QAction("Show &diagnostics", this);
-    diagnostics->setToolTip("Show render timing details in the image overlay (this session only)");
+    m_diagnosticsAction = diagnostics;   // kept for save/restore/reset of layout (roadmap 3.1)
+    diagnostics->setToolTip("Show render timing details in the image overlay (remembered across sessions)");
     diagnostics->setCheckable(true);
     connect(diagnostics, &QAction::toggled, this, [this](bool on) {
         m_showDiagnostics = on;
@@ -271,6 +274,14 @@ MainWindow::MainWindow(QWidget* parent)
     view->addAction(sidebar);
     view->addSeparator();
     view->addAction(diagnostics);
+    view->addSeparator();
+    // Roadmap 3.1: an escape hatch from a layout the user saved by accident. It restores the
+    // built-in defaults from the same constants construction uses, then stores them so a later
+    // close cannot resurrect the layout the user just threw away.
+    auto* resetLayoutAction = new QAction("Re&set layout", this);
+    resetLayoutAction->setToolTip("Restore the built-in window layout (size, splitter, sidebar, diagnostics)");
+    connect(resetLayoutAction, &QAction::triggered, this, &MainWindow::resetLayout);
+    view->addAction(resetLayoutAction);
     view->addSeparator();
     // The same QAction instances the toolbar shows, in one exclusive group (roadmap 6.3).
     auto* tools = view->addMenu("&Tools");
@@ -333,6 +344,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_centralStack->addWidget(m_splitter);     // page 1: folder open
     setCentralWidget(m_centralStack);
 
+    restoreLayout();   // roadmap 3.1: geometry, splitter, sidebar and diagnostics from QSettings
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
@@ -359,6 +371,87 @@ MainWindow::MainWindow(QWidget* parent)
                                .arg(fps, 0, 'f', 0);
                 updateInfo();
             });
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    saveLayout();   // roadmap 3.1: the window arrangement survives a restart
+    QMainWindow::closeEvent(event);
+}
+
+// Roadmap 3.1. Only layout is written here, and only the four keys in settings_names.h. Recent
+// folders, file paths, and anything derived from patient data are deliberately NOT persisted: a
+// viewer of medical images must not leave a trail of what was opened on shared machines. If that
+// ever changes, the decision — not just the feature — must be revisited.
+void MainWindow::saveLayout()
+{
+    QSettings s = clivus::settings::clivusSettings();
+    s.setValue(clivus::settings::kGeometry, saveGeometry());
+    s.setValue(clivus::settings::kSplitter, m_splitter->saveState());
+    s.setValue(clivus::settings::kSidebarVisible, m_seriesList->isVisible());
+    s.setValue(clivus::settings::kDiagnostics, m_diagnosticsAction->isChecked());
+}
+
+namespace {
+}  // namespace
+
+void MainWindow::restoreLayout()
+{
+    QSettings s = clivus::settings::clivusSettings();
+    const bool haveAny = s.contains(clivus::settings::kGeometry) ||
+                         s.contains(clivus::settings::kSplitter);
+    if (haveAny) {
+        bool geometryRestored = false;
+        const QByteArray geometryBytes = s.value(clivus::settings::kGeometry).toByteArray();
+        if (!geometryBytes.isEmpty()) {
+            // restoreGeometry() itself validates the byte layout; the post-check below keeps a
+            // syntactically valid but degenerate/offscreen rectangle (e.g. saved on a monitor that
+            // has since been unplugged) from taking the window where the user cannot reach it.
+            const QRect before = geometry();
+            if (restoreGeometry(geometryBytes)) {
+                const QRect g = frameGeometry();   // includes the frame: compare what the WM gets
+                const QList<QScreen*> screens = QGuiApplication::screens();
+                QRect joined;
+                for (const QScreen* screen : screens)
+                    joined = joined.isNull() ? screen->geometry() : joined.united(screen->geometry());
+                // Usable means: at least the application's own minimum size, and reasonably inside
+                // the attached desktop. A rectangle smaller than that (or parked offscreen, e.g.
+                // saved on a monitor that has since been unplugged) is degenerate.
+                if (g.width() >= std::max(minimumWidth(), 600) &&
+                    g.height() >= std::max(minimumHeight(), 500) &&
+                    !screens.isEmpty() && g.intersects(joined))
+                    geometryRestored = true;
+                else
+                    setGeometry(before);   // undo the restore, fall back below
+            }
+        }
+        if (!geometryRestored) resize(clivus::settings::kDefaultWindowSize);
+
+        if (!m_splitter->restoreState(s.value(clivus::settings::kSplitter).toByteArray())) {
+            m_splitter->setSizes(clivus::settings::kDefaultSplitterSizes);
+        }
+        // The persisted sidebar key decides whether the browser pane starts open; the splitter
+        // state already carries the pane sizes, so this only completes the collapsed case.
+        m_seriesList->setVisible(s.value(clivus::settings::kSidebarVisible, true).toBool());
+    } else {
+        resize(clivus::settings::kDefaultWindowSize);
+    }
+    // Diagnostics: persisted as an explicit bool; a missing/corrupt entry falls back to the
+    // session default (off), matching the pre-3.1 behaviour.
+    m_diagnosticsAction->setChecked(s.value(clivus::settings::kDiagnostics, false).toBool());
+}
+
+void MainWindow::resetLayout()
+{
+    // The same constants construction uses, so the menu and a fresh start agree by construction.
+    resize(clivus::settings::kDefaultWindowSize);
+    m_splitter->setSizes(clivus::settings::kDefaultSplitterSizes);
+    m_seriesList->setVisible(true);
+    m_diagnosticsAction->setChecked(false);
+    // Store immediately: the reset must not be undone by the close handler writing the pre-reset
+    // state back (the closeEvent runs after this and will re-save whatever is now on screen).
+    saveLayout();
+    statusBar()->showMessage("Layout restored to the built-in default", 5000);
 }
 
 // One place that knows the active tool. The checked action is already the single truth in the UI - this
