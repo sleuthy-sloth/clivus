@@ -43,6 +43,8 @@ public:
     void setActiveTool(ActiveTool tool);
     int prefetchIndex() const { return m_prefetchIndex; }   // test probe: the smooth-scroll slot
     bool mprAvailable() const { return m_mprAction && m_mprAction->isEnabled(); }
+    // Documentation capture support: true once a slice is decoded and on the canvas.
+    bool canvasReady() const;
     void openMprForTest() { openMprView(); }
 
 protected:

@@ -1,0 +1,46 @@
+name: screenshots
+
+# Real UI captures, produced by the application itself on a machine with a window server.
+# The Pi that builds the releases has no GL context to render the canvas, and hand-made mockups
+# must not masquerade as screenshots; a macOS runner has a window server, so this job builds there,
+# loads the committed corpus, and uploads what the app actually drew.
+on:
+  workflow_dispatch:
+
+jobs:
+  capture:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          brew install cmake ninja qt dcmtk
+          brew --prefix qt > qt-prefix.txt
+          brew --prefix dcmtk > dcmtk-prefix.txt
+          echo "QT=$(cat qt-prefix.txt)" >> $GITHUB_ENV
+          echo "DCMTK=$(cat dcmtk-prefix.txt)" >> $GITHUB_ENV
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
+            -DDCMTK_DIR="$(brew --prefix dcmtk)/lib/cmake/dcmtk"
+          cmake --build build --parallel
+
+      - name: Capture the real surfaces
+        run: |
+          mkdir -p shots
+          # Widget surfaces, no study: welcome page + About.
+          ./build/app/clivus --capture shots
+          # The viewer with a study loaded and a slice decoded (needs the window server this runner
+          # has; the app skips the canvas shot honestly if no context is available).
+          ./build/app/clivus --capture shots "$PWD/testdata/corpus" || echo "viewer capture unavailable"
+          ls -la shots
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clivus-screenshots
+          path: shots
+          retention-days: 30

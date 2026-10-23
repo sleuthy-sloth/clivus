@@ -579,6 +579,11 @@ void MainWindow::resetLayout()
 // mirrors it into the cursor and the one-line hint so the three cannot drift (roadmap 2.1/2.6).
 // Switching tools changes feedback only; it never disables a gesture, so the user cannot get stuck in a
 // mode that does not do what they expect.
+bool MainWindow::canvasReady() const
+{
+    return m_canvas != nullptr && m_canvas->hasValidFrame();
+}
+
 void MainWindow::openMprView()
 {
     if (m_currentSeries < 0 || m_currentSeries >= int(m_series.size())) return;

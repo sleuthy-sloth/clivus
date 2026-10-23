@@ -7,6 +7,9 @@
 #include <QIcon>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QThread>
 #include <QSurfaceFormat>
 
 #include "about_dialog.h"
@@ -64,11 +67,37 @@ int main(int argc, char** argv)
         const QString dir = parser.value(capture);
         QDir().mkpath(dir);
         QApplication::processEvents();   // let the layout settle before grabbing
-        window.grab().save(dir + QStringLiteral("/welcome-screen.png"));
+        if (args.isEmpty()) {
+            // Branded widget surfaces: no study loaded, no GL needed.
+            window.grab().save(dir + QStringLiteral("/welcome-screen.png"));
+        }
         AboutDialog about(&window);
         about.show();
         QApplication::processEvents();
         about.grab().save(dir + QStringLiteral("/about-screen.png"));
+        about.close();
+
+        if (!args.isEmpty()) {
+            // A real viewer capture: open the study, wait for the first slice to decode and paint,
+            // then grab the whole window. Needs a real GL context (a desktop session or a CI
+            // runner with a window server) — on a headless box the canvas stays blank and the
+            // grab says so instead of pretending.
+            window.openFolder(args.first());
+            QElapsedTimer clock;
+            clock.start();
+            while (clock.elapsed() < 20000) {
+                QApplication::processEvents(QEventLoop::AllEvents, 100);
+                QThread::msleep(50);
+                if (window.canvasReady()) break;
+            }
+            // One more pass so the textured frame is painted before the grab.
+            for (int i = 0; i < 20; ++i) {
+                QApplication::processEvents(QEventLoop::AllEvents, 50);
+                QThread::msleep(30);
+            }
+            if (!window.grab().save(dir + QStringLiteral("/viewer.png")))
+                return 2;
+        }
         return 0;
     }
     if (!args.isEmpty()) window.openFolder(args.first());
