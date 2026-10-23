@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <memory>
 
 namespace clivus {
 namespace fs = std::filesystem;
@@ -54,6 +55,25 @@ bool interDataToFloat(const DiMonoPixel* px, size_t maxPixels, std::vector<float
     return true;
 }
 
+// Reads one object's header, or nothing when the object has no pixel data to show. The first read
+// caps element values at 4096 bytes, which is what keeps a folder scan cheap; if it reports no Pixel
+// Data the object is read once more with no cap before being written off, because that cap is the
+// only thing sitting between a value-heavy object and a normal parse. Only a would-be miss pays for
+// the second read.
+std::unique_ptr<DcmFileFormat> loadHeader(const std::string& file)
+{
+    auto header = std::make_unique<DcmFileFormat>();
+    if (header->loadFile(file.c_str(), EXS_Unknown, EGL_noChange, 4096).bad()) return nullptr;
+    DcmDataset* ds = header->getDataset();
+    if (ds && ds->tagExistsWithValue(DCM_PixelData)) return header;
+
+    auto full = std::make_unique<DcmFileFormat>();
+    if (full->loadFile(file.c_str(), EXS_Unknown, EGL_noChange, 0xFFFFFFFFu).bad()) return nullptr;
+    DcmDataset* fullDs = full->getDataset();
+    if (!fullDs || !fullDs->tagExistsWithValue(DCM_PixelData)) return nullptr;
+    return full;
+}
+
 }  // namespace
 
 std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control)
@@ -79,11 +99,9 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         if (!it->is_regular_file(ec)) continue;
         const fs::path p = it->path();
 
-        DcmFileFormat ff;
-        // 4096-byte cap: reads the header only, so scanning a big folder stays cheap.
-        if (ff.loadFile(p.string().c_str(), EXS_Unknown, EGL_noChange, 4096).bad()) continue;
-        DcmDataset* ds = ff.getDataset();
-        if (!ds || !ds->tagExistsWithValue(DCM_PixelData)) continue;
+        auto header = loadHeader(p.string());
+        if (!header) continue;
+        DcmDataset* ds = header->getDataset();
 
         SeriesInfo s;
         s.seriesUid = tagString(ds, DCM_SeriesInstanceUID);
