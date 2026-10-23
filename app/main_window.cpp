@@ -579,6 +579,17 @@ void MainWindow::resetLayout()
 // mirrors it into the cursor and the one-line hint so the three cannot drift (roadmap 2.1/2.6).
 // Switching tools changes feedback only; it never disables a gesture, so the user cannot get stuck in a
 // mode that does not do what they expect.
+bool MainWindow::selectSeriesForCapture(const QString& modality)
+{
+    for (size_t i = 0; i < m_series.size(); ++i) {
+        if (QString::fromStdString(m_series[i].modality).compare(modality, Qt::CaseInsensitive) != 0)
+            continue;
+        m_seriesList->setCurrentRow(int(i));   // the normal selection path: shows and decodes it
+        return true;
+    }
+    return false;
+}
+
 bool MainWindow::canvasReady() const
 {
     return m_canvas != nullptr && m_canvas->hasValidFrame();

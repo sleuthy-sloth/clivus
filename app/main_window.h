@@ -43,8 +43,10 @@ public:
     void setActiveTool(ActiveTool tool);
     int prefetchIndex() const { return m_prefetchIndex; }   // test probe: the smooth-scroll slot
     bool mprAvailable() const { return m_mprAction && m_mprAction->isEnabled(); }
-    // Documentation capture support: true once a slice is decoded and on the canvas.
+    // Documentation capture support: true once a slice is decoded and on the canvas, and a way to
+    // ask for a chosen series so a capture shows anatomy rather than whichever row sorts first.
     bool canvasReady() const;
+    bool selectSeriesForCapture(const QString& modality);
     void openMprForTest() { openMprView(); }
 
 protected:

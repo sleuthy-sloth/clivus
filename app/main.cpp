@@ -83,6 +83,11 @@ int main(int argc, char** argv)
             // runner with a window server) — on a headless box the canvas stays blank and the
             // grab says so instead of pretending.
             window.openFolder(args.first());
+            // A capture exists to show the viewer doing its job on real anatomy: prefer CT then MR
+            // over whatever sorts first (the corpus's RT Dose is a 10x10 grid at WC 1 / WW 1 —
+            // technically correct, visually a black rectangle).
+            window.selectSeriesForCapture(QStringLiteral("CT")) ||
+                window.selectSeriesForCapture(QStringLiteral("MR"));
             QElapsedTimer clock;
             clock.start();
             while (clock.elapsed() < 20000) {
