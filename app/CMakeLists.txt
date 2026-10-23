@@ -42,6 +42,7 @@ add_test(NAME error_paths COMMAND clivus_test_error_paths "${CMAKE_CURRENT_SOURC
 qt_add_executable(clivus_test_measurements test_measurements.cpp main_window.cpp help_window.cpp canvas_widget.cpp view_controls.cpp)
 target_link_libraries(clivus_test_measurements PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent OpenGL::GL)
 add_test(NAME measurements COMMAND clivus_test_measurements "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(measurements PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 set_tests_properties(error_paths PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # VTK probe: off by default. It needs VTK 9 with the volume rendering modules and no Qt, so it can run
