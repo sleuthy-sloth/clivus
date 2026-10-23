@@ -30,6 +30,7 @@
 #include "canvas_widget.h"
 #include "help_window.h"
 #include "style.h"
+#include "view_controls.h"
 
 namespace {
 
@@ -96,10 +97,20 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_canvas = new CanvasWidget(this);
+    m_sliceBar = new SliceBar(this);
+
+    // Canvas plus the slice strip under it: one viewer page inside the splitter, so the sidebar
+    // splitter still divides browser and image as before.
+    auto* viewer = new QWidget(this);
+    auto* viewerLayout = new QVBoxLayout(viewer);
+    viewerLayout->setContentsMargins(0, 0, 0, 0);
+    viewerLayout->setSpacing(0);
+    viewerLayout->addWidget(m_canvas, 1);
+    viewerLayout->addWidget(m_sliceBar, 0);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->addWidget(m_seriesList);
-    m_splitter->addWidget(m_canvas);
+    m_splitter->addWidget(viewer);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setSizes({320, 900});
 
@@ -277,6 +288,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
+    connect(m_sliceBar, &SliceBar::sliceRequested, this, &MainWindow::goToSlice);
     connect(m_canvas, &CanvasWidget::windowChanged, this, [this](double c, double w) {
         if (m_currentSeries < 0) return;
         m_windowLevel = QString("WC %1  WW %2").arg(c, 0, 'f', 1).arg(w, 0, 'f', 1);
@@ -310,6 +322,7 @@ void MainWindow::openFolder(const QString& dir)
     m_timing.clear();
     m_windowLevel.clear();
     m_canvas->setFrame(clivus::ImageFrame{});   // black, rather than the old folder's image
+    m_sliceBar->setSliceCount(0);
     m_centralStack->setCurrentIndex(1);         // off the empty state: the folder is being opened
     m_status->setText("Loading series…");
     startScan();
@@ -485,6 +498,9 @@ void MainWindow::sliceFinished()
     }
     m_currentSlice = r.index;
     m_currentIsColour = r.frame.isColour();
+    // The strip lands on the slice that actually arrived; if the wheel had moved on, the check above
+    // already returned and the next decode will settle it.
+    m_sliceBar->setCurrentSlice(r.index);
     m_canvas->setFrame(std::move(r.frame));
     updateInfo();
     pumpSlice();     // the wheel may have moved while this decode was running
@@ -579,6 +595,7 @@ void MainWindow::showSeries(int index)
         m_currentSeries = -1;
         m_currentSlice = -1;
         m_desiredSlice = -1;
+        m_sliceBar->setSliceCount(0);
         m_status->setText("This series has no image objects in the index — try another series; the application remains usable.");
         return;
     }
@@ -589,6 +606,10 @@ void MainWindow::showSeries(int index)
     m_timing.clear();
     m_windowLevel.clear();
     m_canvas->setFrame(clivus::ImageFrame{});
+    // The strip's range is the series' flat frame count, so a multi-frame object counts as the
+    // slices it actually carries (the loader already flattens them).
+    m_sliceBar->setSliceCount(m_series[size_t(index)].totalFrames());
+    m_sliceBar->setCurrentSlice(0);
     m_desiredSlice = 0;
     pumpSlice();
 }
@@ -605,7 +626,26 @@ void MainWindow::showSlice(int delta)
     const int next = std::clamp(from + delta, 0, total - 1);
     if (next == m_desiredSlice && (m_sliceInFlight || next == m_currentSlice)) return;
     m_desiredSlice = next;
+    // The slider follows the slice the wheel is aiming at, not the one still decoding: during a fast
+    // spin the strip and the decode pump both chase the same target, and the pump decides when the
+    // decode happens, so this cannot outrun the coalescing in pumpSlice().
+    m_sliceBar->setCurrentSlice(next);
     pumpSlice();
+}
+
+// Absolute jump from the slice slider (roadmap 2.5). It only sets the target and lets pumpSlice()
+// coalesce it, so dragging across a long series issues one decode at a time and a late result for an
+// intermediate position is discarded by the same index check that protects the wheel path.
+void MainWindow::goToSlice(int index)
+{
+    if (m_currentSeries < 0) return;
+    const int total = m_series[size_t(m_currentSeries)].totalFrames();
+    if (total <= 0) return;
+    const int target = std::clamp(index, 0, total - 1);
+    if (target == m_desiredSlice && (m_sliceInFlight || target == m_currentSlice)) return;
+    m_desiredSlice = target;
+    pumpSlice();
+    if (!m_sliceInFlight) updateInfo();
 }
 
 void MainWindow::updateInfo(const QString& extra)

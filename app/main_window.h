@@ -12,6 +12,7 @@
 
 class CanvasWidget;
 class HelpWindow;
+class SliceBar;
 class QLabel;
 class QListWidget;
 class QProgressBar;
@@ -44,6 +45,7 @@ private:
 
     void showSeries(int index);
     void showSlice(int delta);
+    void goToSlice(int index);   // absolute: the slice slider's direct navigation
     void updateInfo(const QString& extra = {});
 
     void startScan();
@@ -65,6 +67,7 @@ private:
     QWidget* m_emptyState = nullptr;
     HelpWindow* m_help = nullptr;
     CanvasWidget* m_canvas = nullptr;
+    SliceBar* m_sliceBar = nullptr;
     QLabel* m_status = nullptr;
     QProgressBar* m_progress = nullptr;
     QPushButton* m_cancel = nullptr;

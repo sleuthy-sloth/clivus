@@ -2,6 +2,7 @@
 #include "canvas_widget.h"
 
 #include <QDebug>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QWheelEvent>
@@ -227,6 +228,26 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent*)
 void CanvasWidget::mouseDoubleClickEvent(QMouseEvent*)
 {
     resetView();
+}
+
+// Keyboard slice stepping (roadmap 2.1/2.5). It reuses scrollRequested, the wheel's signal, so there is
+// one navigation path and the same decode coalescing behind it. Only the canvas handles these keys, not
+// the window: typing in the window/level fields must never be stolen by a global shortcut.
+void CanvasWidget::keyPressEvent(QKeyEvent* e)
+{
+    switch (e->key()) {
+    case Qt::Key_Up:
+    case Qt::Key_PageUp:
+        emit scrollRequested(-1);
+        return;
+    case Qt::Key_Down:
+    case Qt::Key_PageDown:
+        emit scrollRequested(1);
+        return;
+    default:
+        break;
+    }
+    QOpenGLWidget::keyPressEvent(e);
 }
 
 void CanvasWidget::wheelEvent(QWheelEvent* e)
