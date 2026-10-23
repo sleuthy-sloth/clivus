@@ -21,6 +21,14 @@ target_link_libraries(clivus_core PRIVATE SQLite::SQLite3)
 add_executable(clivus_measure tools/measure.cpp)
 target_link_libraries(clivus_measure PRIVATE clivus_core)
 
+add_executable(clivus_parity tools/parity.cpp)
+target_link_libraries(clivus_parity PRIVATE clivus_core)
+
+# Optional parity test: skips loudly when testdata/corpus is absent or no argument.
+add_test(NAME parity COMMAND clivus_parity
+    "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus"
+    "--threshold" "0")
+
 add_executable(clivus_test_image_frame tests/test_image_frame.cpp)
 target_link_libraries(clivus_test_image_frame PRIVATE clivus_core)
 add_test(NAME image_frame COMMAND clivus_test_image_frame)
