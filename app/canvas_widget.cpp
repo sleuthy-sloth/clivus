@@ -3,6 +3,7 @@
 
 #include <QDebug>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -78,6 +79,13 @@ void CanvasWidget::setWindowLevel(double center, double width)
     update();
 }
 
+void CanvasWidget::setOverlay(const QString& topLeft, const QString& topRight)
+{
+    m_overlayLeft = topLeft;
+    m_overlayRight = topRight;
+    update();
+}
+
 void CanvasWidget::uploadTexture()
 {
     if (m_tex == 0 || !m_frame.valid()) return;
@@ -146,6 +154,33 @@ void CanvasWidget::paintGL()
     glEnd();
     glDisable(GL_TEXTURE_2D);
 
+    // Overlays live inside paintGL so they cannot sit on top of the GL surface as child widgets and
+    // intercept mouse input (roadmap 2.6). Consistent font and contrast, one call, no animations.
+    if (!m_overlayLeft.isEmpty() || !m_overlayRight.isEmpty()) {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QFont font = painter.font();
+        font.setPointSizeF(10.0);
+        painter.setFont(font);
+        const QColor text(0xe6, 0xe6, 0xe6, 230);
+        const QColor shadow(0, 0, 0, 160);   // enough contrast on any image, still plain
+        const int pad = 8;
+        if (!m_overlayLeft.isEmpty())
+            painter.drawText(QRect(pad, pad, width() - 2 * pad, 200), Qt::AlignLeft | Qt::AlignTop
+                                                                          | Qt::TextWordWrap,
+                             m_overlayLeft);
+        if (!m_overlayRight.isEmpty()) {
+            const QRect bounds = painter.boundingRect(
+                QRect(0, 0, width() - 2 * pad, 200), Qt::AlignRight | Qt::TextWordWrap,
+                m_overlayRight);
+            painter.setPen(shadow);
+            painter.drawText(bounds.translated(1, 1), Qt::AlignRight, m_overlayRight);
+            painter.setPen(text);
+            painter.drawText(bounds, Qt::AlignRight, m_overlayRight);
+        }
+        painter.end();
+    }
+
     // fps from the wall-clock interval between paints, not from this paint's CPU time:
     // the number that matters is how fast the canvas can actually present.
     const auto now = std::chrono::steady_clock::now();
@@ -179,6 +214,7 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
         update();
     } else if (m_drag == Drag::Pan) {
         m_pan += QPointF(d);
+        emit viewChanged();
         update();
     }
 }
@@ -197,6 +233,7 @@ void CanvasWidget::wheelEvent(QWheelEvent* e)
 {
     if (e->modifiers() & Qt::ControlModifier) {          // ctrl+wheel zooms, like Horos
         m_zoom = std::clamp(m_zoom * (e->angleDelta().y() > 0 ? 1.1f : 1.0f / 1.1f), 0.1f, 20.0f);
+        emit viewChanged();
         update();
         return;
     }

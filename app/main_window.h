@@ -66,6 +66,7 @@ private:
     QProgressBar* m_progress = nullptr;
     QPushButton* m_cancel = nullptr;
     QTimer* m_scanTicker = nullptr;
+    bool m_showDiagnostics = false;   // session-only: timings go away when the app restarts
     std::vector<clivus::SeriesInfo> m_series;
     QString m_folder;
     int m_currentSeries = -1;

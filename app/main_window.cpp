@@ -190,6 +190,16 @@ MainWindow::MainWindow(QWidget* parent)
         m_splitter->setSizes(on ? QList<int>{320, 900} : QList<int>{0, 1220});
     });
 
+    // Roadmap 1.5: timings are development information, not primary UI. Session-only by design —
+    // nothing is persisted, so a fresh session starts clean.
+    auto* diagnostics = new QAction("Show &diagnostics", this);
+    diagnostics->setToolTip("Show render timing details in the image overlay (this session only)");
+    diagnostics->setCheckable(true);
+    connect(diagnostics, &QAction::toggled, this, [this](bool on) {
+        m_showDiagnostics = on;
+        updateInfo();
+    });
+
     auto* manual = new QAction("&User manual", this);
     manual->setToolTip("Open the Clivus user manual");
     manual->setShortcut(QKeySequence::HelpContents);   // F1
@@ -209,6 +219,8 @@ MainWindow::MainWindow(QWidget* parent)
     view->addAction(reset);
     view->addSeparator();
     view->addAction(sidebar);
+    view->addSeparator();
+    view->addAction(diagnostics);
 
     auto* help = menuBar()->addMenu("&Help");
     help->addAction(manual);
@@ -230,6 +242,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_windowLevel = QString("WC %1  WW %2").arg(c, 0, 'f', 1).arg(w, 0, 'f', 1);
         updateInfo();
     });
+    connect(m_canvas, &CanvasWidget::viewChanged, this, [this] { updateInfo(); });
     connect(m_canvas, &CanvasWidget::frameTiming, this,
             [this](double windowMs, double paintMs, double fps) {
                 m_timing = QString("window %1 ms | paint %2 ms | %3 fps")
@@ -557,15 +570,37 @@ void MainWindow::updateInfo(const QString& extra)
         const int frames = fileIndex < int(s.frameCounts.size()) ? s.frameCounts[size_t(fileIndex)] : 1;
         if (frames > 1) frameNote = QString("   frame %1/%2").arg(frameIndex + 1).arg(frames);
     }
-    QString text = QString("%1 — %2  [%3]   %4   %5")
-                       .arg(QString::fromStdString(s.patientName))
-                       .arg(position)
-                       .arg(QString::fromStdString(s.seriesDescription))
-                       .arg(m_windowLevel)
-                       .arg(m_timing);
-    text += frameNote;
-    if (!extra.isEmpty()) text += "   " + extra;
-    m_status->setText(text);
+
+    // Roadmap 1.4: viewing information on the canvas overlays, diagnostics only under the toggle.
+    // Top-left: what the series is. Top-right: how it is being viewed right now.
+    QStringList left;
+    const QString description = QString::fromStdString(
+        !s.seriesDescription.empty() ? s.seriesDescription : s.studyDescription);
+    if (!description.isEmpty()) left << description;
+    if (!s.modality.empty()) left << QString::fromStdString(s.modality);
+    if (s.width > 0 && s.height > 0) left << QString("%1 × %2").arg(s.width).arg(s.height);
+    left << position + frameNote;
+    if (!extra.isEmpty()) left << extra;
+
+    QString right;
+    if (m_currentIsColour) {
+        right = "colour frame — window/level not applied";
+    } else if (!m_windowLevel.isEmpty()) {
+        right = m_windowLevel;
+    }
+    const double zoom = m_canvas->zoomFactor();
+    if (zoom > 0.0) right += QString(right.isEmpty() ? "" : "   ") + QString("%1%").arg(int(zoom * 100.0));
+    if (m_showDiagnostics && !m_timing.isEmpty()) right += "\n" + m_timing;
+
+    m_canvas->setOverlay(left.join(QLatin1String("\n")), right);
+
+    // The status bar keeps only state, not a running technical string (roadmap 1.5).
+    QString status = QString("Slice %1 of %2 — %3")
+                         .arg(m_currentSlice < 0 ? QString("…") : QString::number(m_currentSlice + 1))
+                         .arg(total)
+                         .arg(description.isEmpty() ? QString("(no description)") : description);
+    if (!extra.isEmpty()) status += " — " + extra;
+    m_status->setText(status);
 }
 
 // Help and About arrive with the help-menu skeleton commit; the actions exist from the start so the
