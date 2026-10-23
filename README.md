@@ -106,9 +106,10 @@ objects are smoke-tested for dimensions only, and their rows say so.
 
 ## Using it
 
-**No toolchain required:** the [Windows GUI build](https://github.com/sleuthy-sloth/clivus/actions/workflows/windows-app.yml)
-uploads a runnable **`clivus-windows-x64`** artifact — exe, Qt/DCMTK DLLs, test
-corpus, licence pack. Download, unzip, and on any Windows machine:
+**No toolchain required:** grab **[v0.1.0](https://github.com/sleuthy-sloth/clivus/releases)** —
+the release page carries a runnable `clivus` zip (exe + Qt/DCMTK DLLs + test
+corpus + licence pack), permanently; the CI artifact above is the same thing,
+rebuild daily at the current HEAD. Download, unzip, and on any Windows machine:
 
 ```powershell
 clivus.exe .\corpus --bench 150
