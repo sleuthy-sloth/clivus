@@ -738,6 +738,10 @@ void MainWindow::updateInfo(const QString& extra)
     if (!extra.isEmpty()) status += " — " + extra;
     // Roadmap 2.2: colour frames are not a failure, but the missing window/level must be stated, not
     // left for the user to discover by dragging with no effect.
+    // Zoom is viewport state, not series state: show it in the status bar only when it differs from
+    // the fitted default, so the common case stays quiet (roadmap 2.4).
+    if (zoom > 0.0 && std::abs(zoom - 1.0) > 0.001)
+        status += QString(" — zoom %1%").arg(int(zoom * 100.0 + 0.5));
     if (m_currentIsColour) status += " — colour image: window/level is not applied";
     m_status->setText(status);
 }

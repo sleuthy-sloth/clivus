@@ -58,16 +58,23 @@ void CanvasWidget::resetView()
     m_pan = QPointF(0, 0);
     m_texDirty = true;
     emit windowChanged(m_center, m_width);
+    emit viewChanged();   // zoom went back to 100%: the zoom readout has to say so
     update();
 }
 
-// "Fit" is the state setFrame() starts from: the image is always drawn to fit the viewport before
-// zoom is applied, so fitting is just zoom back to 1.0 (and re-centre), without touching the
-// window/level the user may have set.
+// Fit Image: zoom back to 1.0 (the image is always drawn fit to the viewport before zoom is
+// applied) and recentre, leaving window/level alone. Reset View is the stronger version: it also
+// restores the full dynamic window. Both emit viewChanged so the zoom percentage in the overlay and
+// the status line is never stale after a toolbar click.
+//
+// Slice changes keep zoom and pan: setFrame() is only called when a new *series* is shown or a folder
+// is opened, and that is what resets the view. Stepping through slices of one series therefore holds
+// the zoom the user chose, which is what a stack comparison needs.
 void CanvasWidget::fitView()
 {
     m_zoom = 1.0f;
     m_pan = QPointF(0, 0);
+    emit viewChanged();
     update();
 }
 
@@ -243,6 +250,11 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e)
     case Qt::Key_Down:
     case Qt::Key_PageDown:
         emit scrollRequested(1);
+        return;
+    case Qt::Key_R:
+        // Reset View, same as double-click. Handled here rather than as a window-level QAction
+        // shortcut so typing "R" in the window/level fields is never intercepted (roadmap 2.1).
+        resetView();
         return;
     default:
         break;
