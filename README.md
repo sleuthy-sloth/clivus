@@ -6,45 +6,77 @@
 ![Qt 6](https://img.shields.io/badge/Qt-6.8%2B-41CD52?logo=qt&logoColor=white)
 ![Licence](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)
 
-A cross-platform DICOM viewer in the Horos/OsiriX tradition, built Windows-first.
-C++20 + Qt 6 + DCMTK + OpenGL, with one working rule: **nothing stays in this tree
-that can't be measured.**
+**If you study, teach, or do research on medical images and you don't own a Mac,
+your viewer choices are bad, expensive, or both.** Horos and OsiriX — the two
+genuinely good free DICOM viewers — are macOS only. On Windows, the platform most
+of the medical and research world actually runs, your realistic options are a
+locked-down PACS workstation you don't control, subscription seats priced for
+hospitals, half-priced versions with the features greyed out, or extracting
+pixels by hand. The good tool exists. It just isn't available to you.
+
+Clivus is the answer: **a new, free, open-source DICOM viewer that follows the
+Horos/OsiriX workflow and is built Windows first.** Drag-to-window on the canvas,
+series thumbnails that load real series correctly, volume stacks that aren't
+fooled by shuffled filenames. Same feel as the tools people love, none of the
+assumption that you own a Mac.
 
 > **Research tool, not a medical device.** No regulatory clearance, no clinical
-> validation. Don't use it for diagnosis or any decision affecting patient care.
+> validation, nothing here for diagnosis or any decision affecting patient care.
+> The clinical-grade path is the ambition; this is the foundation it gets built
+> on, in the open, loudly.
 
-It follows the Horos/OsiriX workflow but shares no code with them — this is a new
-codebase, not a port. "Horos" and "OsiriX" are trademarks of their respective
-owners.
+It shares no code with Horos or OsiriX — new codebase, proven open ingredients
+(Qt 6, DCMTK, OpenGL, SQLite). "Horos" and "OsiriX" are trademarks of their
+respective owners.
 
-## Why the repo looks like a spike
+## Why build this now
 
-DICOM viewers usually die in two places: pixels that quietly lie, and a UI that
-can't keep up with a real series. So Clivus started as a single question: **does a
-Qt6 + OpenGL canvas hold 60 fps on real series while windowing?** Everything here
-exists to answer that question, and the answer is *yes, with room to spare* — the
-numbers are below.
+Three arguments, in order of how much they weighed.
 
-- **`core/`** — Qt-free, unit-tested: DICOM series scan (DCMTK), modality-value
-  frames, linear VOI LUT window/level, whole-volume geometry. Builds without any
-  GUI toolkit.
-- **`app/`** — Qt6 Widgets shell: series list with thumbnails, GL canvas,
-  drag-to-window, pan, zoom, wheel-to-scroll, live frame timings in the status
-  bar.
+**1. The gap is real and measurable.** macOS has had twenty years of serious free
+DICOM tooling. Windows has been served trial ware, watermarked exports, and
+enterprise pricing. A resident with a ThinkPad and a research question — or a
+hospitalist reviewing a CT from a training set — has nowhere to go. That's a
+market hole, not a niche.
 
-## Every supported transfer syntax must *prove* it decodes
+**2. Trust has to be engineered, not promised.** The failure mode that matters in
+a viewer is a pixel that is slightly wrong — compression quietly changing a
+value, an upgrade changing output. There is exactly one cure: tests that compare
+decoded images to ground truth and fail loudly. Clivus is built test-first for
+exactly this reason; the fidelity table below is not decoration, it is the
+product.
 
-`clivus_test_decode testdata/corpus` is the codec matrix. Two findings shaped it:
+**3. The hard question has been answered.** Viewers historically stumble on
+interaction speed: can the canvas keep up when a user drags the window across a
+12-bit CT series? A spike in this repository answers *yes, with two orders of
+magnitude of headroom* (0.34 ms to re-window a 512² frame against a 16.7 ms
+budget). That converts "build a Windows DICOM viewer" from open research into an
+engineering plan — which is why this repo exists and why the remaining work is a
+roadmap instead of a guess.
 
-1. **DCMTK registers no decoder by default.** RLE, JPEG, JPEG-LS and JPEG 2000
-   each need their own `…Registration::registerCodecs()` call; without one, every
-   compressed file fails with `can't change to unencapsulated representation for
-   pixel data`. `core/src/codecs.cpp` does all of it once, guarded by
-   `__has_include`, so a DCMTK built without a codec still compiles.
-2. **Whether JPEG 2000 decodes belongs to the DCMTK build, not to DCMTK.**
-   Homebrew's build ships no J2K decoder; vcpkg's does, via the `openjpeg`
-   feature. That's why `vcpkg.json` asks for `openjpeg` and why Windows CI
-   *asserts* the J2K rows decode pixel-identically rather than merely trying.
+## What Clivus does today
+
+Real, working, test-backed:
+
+- **Browse a folder like a study.** Point it at DICOM files; get a series list
+  with thumbnails, wheel-to-scroll, pan, zoom, and live frame timings in the
+  status bar.
+- **Window/level with the Horos gesture.** Left-drag widens/centres; the maths is
+  the DICOM linear VOI LUT, not an approximation of it.
+- **Decode nearly everything's pixels.** Explicit-VR LE, RLE, JPEG, JPEG-LS, and
+  JPEG 2000 where the DCMTK build carries it — with every lossless codec asserted
+  pixel-identical to ground truth.
+- **Load volumes in physically correct order.** Sorted by position along the
+  scan normal, spacing from real geometry, markers-tested against shuffled
+  filenames and `InstanceNumber`.
+
+The pipeline in one sentence: point it at a folder, click a series, drag the
+window, watch 60 fps.
+
+## Fidelity: every supported syntax must prove itself
+
+`clivus_test_decode testdata/corpus` is the codec matrix, and it is the most
+important table in this repository:
 
 | Transfer syntax | Test objects | brew DCMTK 3.7.1 | Windows CI (vcpkg + openjpeg) |
 |---|---|---|---|
@@ -54,76 +86,31 @@ numbers are below.
 | JPEG 2000 Lossless / Lossy | MR_small_jp2klossless, JPEG2000, MR2_J2KI | not in this build | asserted identical to MR_small |
 
 The three lossless variants of `MR_small` must decode to **exactly** the
-uncompressed pixel values, so a DCMTK upgrade that silently changes decompressed
-output fails the suite instead of a radiologist. Lossy and near-lossless objects
-are smoke-tested for dimensions only.
+uncompressed pixel values. If a DCMTK upgrade ever silently changes decompressed
+output, the suite fails before a human image is wrong. Lossy and near-lossless
+objects are smoke-tested for dimensions only, and their rows say so.
 
-Two loader behaviours this matrix forced:
+## Using it
 
-- Encapsulated pixel data is decompressed through the registered-codec path
-  (`chooseRepresentation(EXS_LittleEndianExplicit)`) before `DicomImage` sees it,
-  because `DicomImage`'s own encapsulated route rejects valid objects such as
-  32-bit RLE RT Dose. One code path for every file.
-- 32-bit multi-frame objects hand back the whole frame stack in one buffer, so the
-  loader clamps to `width*height` (frame 0) rather than assuming a single frame.
+**No toolchain required:** the [Windows GUI build](https://github.com/sleuthy-sloth/clivus/actions/workflows/windows-app.yml)
+uploads a runnable **`clivus-windows-x64`** artifact — exe, Qt/DCMTK DLLs, test
+corpus, licence pack. Download, unzip, and on any Windows machine:
 
-## Measured, not promised
+```powershell
+clivus.exe .\corpus --bench 150
+```
 
-`clivus <folder> --bench N` repaints the canvas N times with the window/level
-nudged every frame — full drag cost: re-window, texture upload, draw. Apple
-M-series, Qt 6.12 + DCMTK 3.7.1, release build:
+Read the GL line it prints at startup: a real vendor (NVIDIA/AMD/Intel) makes the
+fps number meaningful; `GDI Generic` means no real driver and the numbers are
+worthless. Details in [`docs/windows.md`](docs/windows.md), the full runbook.
 
-| Image | window (CPU, ms) | paint (CPU, ms) | fps | decode (ms/slice) |
-|---|---|---|---|---|
-| 512×512 | 0.34 | 0.37 | 60 (vsync-capped) | 0.7 |
-| 1024×1024 | 1.16 | 1.18 | 60 (vsync-capped) | 2.8 |
-
-Windowing alone, no GL (`clivus_measure`): 0.20 ms at 512², 0.80 ms at 1024². The
-CPU side of a drag sits two orders of magnitude under the 16.7 ms frame budget —
-the remaining question for Windows is the GPU path, not this pixel path.
-
-## The series index: restart persistence with nothing to invalidate
-
-Opening a folder writes `<folder>/.clivus-index.sqlite` next to the data, keyed on
-a fingerprint of the folder — file count, newest mtime, total bytes. Unchanged
-folder, cached results in ~1 ms. Changed folder, automatic miss and full rescan.
-There is no invalidation logic, because there is nothing to invalidate:
-
-| 50-slice real CT series | scan |
-|---|---|
-| first start, no index | 29.7 ms |
-| every start after | 1.2–1.7 ms |
-
-## Volume stacks: geometry first, filenames never
-
-`loadVolume()` orders a series **by position along the slice normal** — not by
-`InstanceNumber` and not by filename. Real series arrive shuffled, and MPR/3D
-produce wrong images if you trust either. Spacing uses `PixelSpacing` plus the
-median gap between slice positions. Its test is adversarial on purpose: a
-committed 4-slice series whose pixel values name their own index and whose
-filenames run backwards, so trusting files *or* `InstanceNumber` fails it.
-
-On a real TCIA `4D-Lung` series (50 × 512²): whole stack in **58–100 ms**. VTK
-rendering is opt-in (`cmake --preset mac-vtk`, `CLIVUS_BUILD_VTK_PROBE=ON`) via
-`app/vtk_probe.cpp`, deliberately Qt-free; it renders that stack at 8 ms/frame on
-the GPU after a 163 ms first frame.
-
-A test-design note worth keeping: the tests are `assert`-based, and `Release`
-builds define `NDEBUG`, which erases every check while still printing "all checks
-passed". `core/CMakeLists.txt` strips `NDEBUG` for test targets — without that,
-the CI suite proved nothing.
-
-## Try it
-
-**Every platform source:**
+**From source:**
 
 ```bash
 # macOS (Homebrew Qt6 + DCMTK)
 brew install qt dcmtk
 cmake --preset mac && cmake --build --preset mac
-build/mac/core/clivus_test_decode testdata/corpus        # codec matrix
-build/mac/app/clivus testdata/corpus                     # GUI
-build/mac/app/clivus testdata/synthetic512 --bench 150   # fps at 512²
+build/mac/app/clivus testdata/synthetic512 --bench 150
 ```
 
 ```powershell
@@ -133,44 +120,105 @@ cmake --build --preset win
 ctest --preset win
 ```
 
-CI builds and tests **core only** on every commit; a manual workflow compiles the
-full Qt GUI with MSVC. Neither can measure fps — that needs a real GPU. But you
-don't need any of this: the [Windows GUI workflow](https://github.com/sleuthy-sloth/clivus/actions/workflows/windows-app.yml)
-uploads a runnable **`clivus-windows-x64`** artifact (exe + Qt/DCMTK DLLs + test
-corpus). Download it to any Windows machine and run:
+`testdata/make_synthetic.py` generates a synthetic 8-slice CT series with
+slope/intercept and `PixelPaddingValue`, so development never needs patient data;
+`testdata/corpus/` carries ten small public sample objects.
 
-```powershell
-clivus.exe .\corpus --bench 150
-```
+---
 
-`testdata/make_synthetic.py` generates an 8-slice signed 12-bit CT series with
-slope/intercept and `PixelPaddingValue`, so the loader is testable without patient
-data; `testdata/corpus/` holds ten small pydicom sample objects for real-world
-sanity checks. The full runbook with pass criteria is
-[`docs/windows.md`](docs/windows.md).
+# Technical notes
 
-## Status
+Everything below is for people extending or auditing the code — nothing here is
+needed to run the viewer.
 
-Shipped: explicit-VR LE, RLE, JPEG, JPEG-LS decoding plus JPEG 2000 where the
-DCMTK build carries it; the SQLite series index; window/level, pan, zoom;
-volume loading with geometry-aware ordering; the VTK probe.
+## The spike that started it
 
-Deliberately not here yet:
+Clivus began as one yes/no question: **does a Qt6 + OpenGL canvas hold 60 fps on
+real series while windowing?** The repository is still shaped like the
+laboratory that answered it — measurement harnesses in `core/tools`, adversarial
+test data in `testdata`, and a `core/` that builds and tests without any GUI
+toolkit at all.
 
-- Colour images, multi-frame objects (frame 0 only), presentation LUTs
-- JPEG 2000 on macOS (brew's DCMTK lacks the decoder until this tree vendors its
-  own DCMTK build; Windows CI covers it now)
-- DoseGridScaling (RT Dose reads as raw ranges until it lands — a ticket, not a
-  decode bug)
-- VTK / MPR / 3D in the real viewer (decided for v1; the probe is the proof)
-- Measurement tools, PACS networking, plugin ABI
-- No AGPL code of any kind in this tree; the Horos-derived AGPL content shipped in
-  Horos 4.0.1 stays outside
+- `core/` — Qt-free, unit-tested: series scan (DCMTK), modality-value frames,
+  linear VOI LUT window/level, volume geometry.
+- `app/` — Qt6 Widgets shell around the GL canvas, with the bench mode that
+  produced every number in this document.
 
-Remaining from the spike:
+## Measured performance (Apple M-series, Qt 6.12 + DCMTK 3.7.1, release)
 
-1. Window/level correctness vs Horos on the same objects (WC/WW parity, pixel diff)
-2. VTK 9 + `QVTKOpenGLNativeWidget` swap for the canvas
+`clivus <folder> --bench N` repaints the canvas N times with the window/level
+nudged each frame — it pays the full drag cost (re-window + texture upload +
+draw):
+
+| Image | window (CPU, ms) | paint (CPU, ms) | fps | decode (ms/slice) |
+|---|---|---|---|---|
+| 512×512 | 0.34 | 0.37 | 60 (vsync-capped) | 0.7 |
+| 1024×1024 | 1.16 | 1.18 | 60 (vsync-capped) | 2.8 |
+
+Windowing alone, no GL (`clivus_measure`): 0.20 ms at 512², 0.80 ms at 1024².
+Two orders of magnitude under budget.
+
+## Loader internals the codec matrix forced
+
+1. **DCMTK registers no decoder by default.** RLE, JPEG, JPEG-LS and JPEG 2000
+   each need their own `…Registration::registerCodecs()` call, or compressed
+   files fail with `can't change to unencapsulated representation for pixel
+   data`. `core/src/codecs.cpp` registers all of them once, `__has_include`-guarded
+   so a codec-less DCMTK build still compiles.
+2. **JPEG 2000 is a property of the DCMTK build, not of DCMTK.** Homebrew's
+   ships no J2K decoder; vcpkg's does via the `openjpeg` feature, which is why
+   `vcpkg.json` asks for it and why Windows CI asserts the J2K rows decode
+   identically rather than merely attempting them.
+3. **Encapsulated pixel data goes through the codec path**
+   (`chooseRepresentation(EXS_LittleEndianExplicit)`) instead of `DicomImage`'s
+   own route, which rejects valid objects such as 32-bit RLE RT Dose — one code
+   path for every file.
+4. **32-bit multi-frame objects** hand back the whole frame stack in one buffer;
+   the loader clamps to `width*height` (frame 0) rather than assuming one frame.
+
+## Volume loading
+
+Geometry first, filenames never: `loadVolume()` orders slices **by position
+along the slice normal**, not by `InstanceNumber` and not by filename. Spacing
+comes from `PixelSpacing` plus the median gap between slice positions. The unit
+test is adversarial: a committed 4-slice series whose pixel values name their own
+index and whose filenames run backwards — trusting files *or* tags fails it.
+
+TCIA `4D-Lung`, 50 × 512²: whole stack in **58–100 ms**. VTK rendering is
+opt-in (`cmake --preset mac-vtk`, `CLIVUS_BUILD_VTK_PROBE=ON`) through
+`app/vtk_probe.cpp`, deliberately Qt-free; 8 ms/frame GPU after a 163 ms first
+frame.
+
+## The series index
+
+Opening a folder writes `<folder>/.clivus-index.sqlite`, keyed on a fingerprint
+of the folder (file count, newest mtime, total bytes). Unchanged folder, cached
+in ~1 ms; changed folder, automatic miss and rescan — no invalidation logic
+because there is nothing to invalidate.
+
+| 50-slice real CT series | scan |
+|---|---|
+| first start, no index | 29.7 ms |
+| every start after | 1.2–1.7 ms |
+
+## How the tests work
+
+They are `assert`-based, and `Release` builds define `NDEBUG`, which erases every
+check while the binary still prints "all checks passed". `core/CMakeLists.txt`
+strips `NDEBUG` for test targets — without that, the CI suite proved nothing.
+
+## Roadmap
+
+- **In progress:** off-thread scan/thumbnail/slice decode with progress and
+  cancel; `glTexSubImage2D` on the drag path; a full-header fallback in the scan
+  for objects whose meta blocks push `PixelData` past the fast path.
+- **Then:** colour images, multi-frame, presentation LUTs; `DoseGridScaling`;
+  window/level parity tests against Horos; codec-registered DCMTK on macOS for
+  JPEG 2000.
+- **v1:** VTK / MPR / 3D with `QVTKOpenGLNativeWidget` in the real viewer.
+- **Not planned for v1:** PACS networking, measurement tools, plugin ABI.
+- **Always out:** no AGPL code of any kind in this tree; the AGPL content that
+  ships inside Horos 4.0.1 stays outside.
 
 ## Licence
 
@@ -178,3 +226,6 @@ GPL-3.0-or-later — see [`LICENSE`](LICENSE). Qt 6 is used under its GPL-3.0
 option, so binaries built from this repository are GPL-3.0-or-later as a whole.
 DCMTK, SQLite, VTK and the JPEG-family codecs keep their permissive licences;
 terms and required notices in [`THIRD-PARTY.md`](THIRD-PARTY.md).
+
+Every claim in this README is backed by code in the tree. If one stops being
+backed, the README should be the first thing to break.
