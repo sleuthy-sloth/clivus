@@ -11,12 +11,17 @@
 #include <QImage>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QEvent>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScreen>
+#include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -98,6 +103,35 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesList->setWordWrap(true);                 // long descriptions wrap instead of clipping
     m_seriesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+
+    // Roadmap 3.2: search over the series browser. Mechanism: the rows are already built (with
+    // thumbnails), so the filter only hides and shows them — it never rebuilds, re-sorts or touches
+    // the background thumbnail/slice loading. Matching is case-insensitive substring against the
+    // row's own visible text, which is exactly the description + modality/count/dimensions label the
+    // user is reading. When everything is filtered out one disabled "(no matching series)" row
+    // appears; when the box is cleared the list returns to all rows with the selection unchanged.
+    // The line edit sits above the list inside the same splitter pane, so it is in the natural tab
+    // focus order (search box -> list) and Ctrl+F jumps straight to it.
+    m_seriesSearch = new QLineEdit(this);
+    m_seriesSearch->setPlaceholderText("Search series…");
+    m_seriesSearch->setClearButtonEnabled(true);
+    m_seriesSearch->setToolTip("Filter the series list by description or modality (Ctrl+F)");
+    // Roadmap 3.4: Escape inside the box is a two-step undo — first clear the query, then hand
+    // focus back to the list. Handled by an event filter rather than a shortcut so it can't fire
+    // while the user is in ANY other widget.
+    m_seriesSearch->installEventFilter(this);
+    // Ctrl+F focus shortcut: QLineEdits carry no shortcuts of their own; the shortcut lives on a
+    // window-level QAction that just puts keyboard focus into the box.
+    auto* findSeries = new QAction(this);
+    findSeries->setShortcut(QKeySequence::Find);   // Ctrl+F
+    connect(findSeries, &QAction::triggered, m_seriesSearch,
+            [this]() { m_seriesSearch->setFocus(Qt::ShortcutFocusReason); });
+    addAction(findSeries);
+    connect(m_seriesSearch, &QLineEdit::textChanged, this, [this](const QString&) {
+        // Placeholder auto-clears on typing-empty: an empty query shows every row again.
+        applySeriesFilter();
+    });
+
     m_canvas = new CanvasWidget(this);
     // The gestures are fixed regardless of the highlighted tool, so they are stated once here
     // (roadmap 2.1) instead of being implied by whichever action happens to be checked.
@@ -129,7 +163,15 @@ MainWindow::MainWindow(QWidget* parent)
     viewerLayout->addWidget(m_sliceBar, 0);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
-    m_splitter->addWidget(m_seriesList);
+    // The search box and the list are one browser pane (roadmap 3.2): the box filters the list
+    // below it, and the splitter divides that pane from the viewer as before.
+    auto* sidebarPane = new QWidget(this);
+    auto* sidebarLayout = new QVBoxLayout(sidebarPane);
+    sidebarLayout->setContentsMargins(0, 0, 0, 0);
+    sidebarLayout->setSpacing(0);
+    sidebarLayout->addWidget(m_seriesSearch, 0);
+    sidebarLayout->addWidget(m_seriesList, 1);
+    m_splitter->addWidget(sidebarPane);
     m_splitter->addWidget(viewer);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setSizes({320, 900});
@@ -188,9 +230,14 @@ MainWindow::MainWindow(QWidget* parent)
     // wired to the same thing (roadmap 6.3). Each action drives behaviour that already exists.
     auto* fit = new QAction("Fit &image", this);
     fit->setIcon(QIcon::fromTheme("zoom-fit-best"));
-    fit->setToolTip("Scale the image to fit the canvas (keeps the aspect ratio)");
+    fit->setToolTip("Scale the image to fit the canvas, keeping the aspect ratio (F)");
+    fit->setShortcut(Qt::Key_F);
     connect(fit, &QAction::triggered, m_canvas, &CanvasWidget::fitView);
 
+    // Deliberately no application shortcut on Reset view: the canvas already consumes R
+    // (canvas_widget.cpp keyPressEvent) while it has focus, and a second handler at window scope
+    // would make the boundary between "canvas focused" and "anywhere" ambiguous (roadmap 3.4).
+    // Keyboard users reach reset from this menu via its mnemonic, or R on the canvas, or double-click.
     auto* reset = new QAction("&Reset view", this);
     reset->setIcon(QIcon::fromTheme("view-refresh"));
     reset->setToolTip("Restore default zoom, pan and window/level (double-click or R on the canvas)");
@@ -231,9 +278,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(pointer, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pointer); });
 
     auto* sidebar = new QAction("&Series sidebar", this);
-    sidebar->setToolTip("Show or hide the series browser");
+    sidebar->setToolTip("Show or hide the series browser (Ctrl+B)");
     sidebar->setCheckable(true);
     sidebar->setChecked(true);
+    sidebar->setShortcut(QKeySequence("Ctrl+B"));
     connect(sidebar, &QAction::toggled, this, [this](bool on) {
         m_seriesList->setVisible(on);
         // Give the reclaimed space to the canvas: the image is the point.
@@ -243,8 +291,10 @@ MainWindow::MainWindow(QWidget* parent)
     // Roadmap 1.5: timings are development information, not primary UI. Session-only by design —
     // nothing is persisted, so a fresh session starts clean.
     auto* diagnostics = new QAction("Show &diagnostics", this);
-    diagnostics->setToolTip("Show render timing details in the image overlay (this session only)");
+    m_diagnosticsAction = diagnostics;   // kept for save/restore/reset of layout (roadmap 3.1)
+    diagnostics->setToolTip("Show render timing details in the image overlay (remembered across sessions) (Ctrl+D)");
     diagnostics->setCheckable(true);
+    diagnostics->setShortcut(QKeySequence("Ctrl+D"));
     connect(diagnostics, &QAction::toggled, this, [this](bool on) {
         m_showDiagnostics = on;
         updateInfo();
@@ -271,6 +321,14 @@ MainWindow::MainWindow(QWidget* parent)
     view->addAction(sidebar);
     view->addSeparator();
     view->addAction(diagnostics);
+    view->addSeparator();
+    // Roadmap 3.1: an escape hatch from a layout the user saved by accident. It restores the
+    // built-in defaults from the same constants construction uses, then stores them so a later
+    // close cannot resurrect the layout the user just threw away.
+    auto* resetLayoutAction = new QAction("Re&set layout", this);
+    resetLayoutAction->setToolTip("Restore the built-in window layout (size, splitter, sidebar, diagnostics)");
+    connect(resetLayoutAction, &QAction::triggered, this, &MainWindow::resetLayout);
+    view->addAction(resetLayoutAction);
     view->addSeparator();
     // The same QAction instances the toolbar shows, in one exclusive group (roadmap 6.3).
     auto* tools = view->addMenu("&Tools");
@@ -333,8 +391,16 @@ MainWindow::MainWindow(QWidget* parent)
     m_centralStack->addWidget(m_splitter);     // page 1: folder open
     setCentralWidget(m_centralStack);
 
+    restoreLayout();   // roadmap 3.1: geometry, splitter, sidebar and diagnostics from QSettings
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
+    // Roadmap 3.4: keyboard navigation — arrows move currentRow (loading as it goes, since
+    // currentRowChanged drives showSeries), and Return/Enter activates the row under the caret even
+    // when it is already current (e.g. after tabbing in with the mouse having selected elsewhere).
+    connect(m_seriesList, &QListWidget::activated, this, [this](const QModelIndex& index) {
+        if (index.isValid() && m_seriesList->currentRow() != index.row())
+            m_seriesList->setCurrentRow(index.row());
+    });
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
     connect(m_sliceBar, &SliceBar::sliceRequested, this, &MainWindow::goToSlice);
     // The canvas is the one that changes values by dragging; it reports them here, this is where they
@@ -359,6 +425,106 @@ MainWindow::MainWindow(QWidget* parent)
                                .arg(fps, 0, 'f', 0);
                 updateInfo();
             });
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    saveLayout();   // roadmap 3.1: the window arrangement survives a restart
+    QMainWindow::closeEvent(event);
+}
+
+// Roadmap 3.4: the search box reacts to Escape before QLineEdit's own handling, so the user can
+// back out of filtering without no-touching the mouse: first press clears the query, further
+// presses return focus to the series list, where arrows continue.
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_seriesSearch && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape) {
+            if (!m_seriesSearch->text().isEmpty()) {
+                m_seriesSearch->clear();
+            } else {
+                m_seriesList->setFocus();
+            }
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+// Roadmap 3.1. Only layout is written here, and only the four keys in settings_names.h. Recent
+// folders, file paths, and anything derived from patient data are deliberately NOT persisted: a
+// viewer of medical images must not leave a trail of what was opened on shared machines. If that
+// ever changes, the decision — not just the feature — must be revisited.
+void MainWindow::saveLayout()
+{
+    QSettings s = clivus::settings::clivusSettings();
+    s.setValue(clivus::settings::kGeometry, saveGeometry());
+    s.setValue(clivus::settings::kSplitter, m_splitter->saveState());
+    s.setValue(clivus::settings::kSidebarVisible, m_seriesList->isVisible());
+    s.setValue(clivus::settings::kDiagnostics, m_diagnosticsAction->isChecked());
+}
+
+namespace {
+}  // namespace
+
+void MainWindow::restoreLayout()
+{
+    QSettings s = clivus::settings::clivusSettings();
+    const bool haveAny = s.contains(clivus::settings::kGeometry) ||
+                         s.contains(clivus::settings::kSplitter);
+    if (haveAny) {
+        bool geometryRestored = false;
+        const QByteArray geometryBytes = s.value(clivus::settings::kGeometry).toByteArray();
+        if (!geometryBytes.isEmpty()) {
+            // restoreGeometry() itself validates the byte layout; the post-check below keeps a
+            // syntactically valid but degenerate/offscreen rectangle (e.g. saved on a monitor that
+            // has since been unplugged) from taking the window where the user cannot reach it.
+            const QRect before = geometry();
+            if (restoreGeometry(geometryBytes)) {
+                const QRect g = frameGeometry();   // includes the frame: compare what the WM gets
+                const QList<QScreen*> screens = QGuiApplication::screens();
+                QRect joined;
+                for (const QScreen* screen : screens)
+                    joined = joined.isNull() ? screen->geometry() : joined.united(screen->geometry());
+                // Usable means: at least the application's own minimum size, and reasonably inside
+                // the attached desktop. A rectangle smaller than that (or parked offscreen, e.g.
+                // saved on a monitor that has since been unplugged) is degenerate.
+                if (g.width() >= std::max(minimumWidth(), 600) &&
+                    g.height() >= std::max(minimumHeight(), 500) &&
+                    !screens.isEmpty() && g.intersects(joined))
+                    geometryRestored = true;
+                else
+                    setGeometry(before);   // undo the restore, fall back below
+            }
+        }
+        if (!geometryRestored) resize(clivus::settings::kDefaultWindowSize);
+
+        if (!m_splitter->restoreState(s.value(clivus::settings::kSplitter).toByteArray())) {
+            m_splitter->setSizes(clivus::settings::kDefaultSplitterSizes);
+        }
+        // The persisted sidebar key decides whether the browser pane starts open; the splitter
+        // state already carries the pane sizes, so this only completes the collapsed case.
+        m_seriesList->setVisible(s.value(clivus::settings::kSidebarVisible, true).toBool());
+    } else {
+        resize(clivus::settings::kDefaultWindowSize);
+    }
+    // Diagnostics: persisted as an explicit bool; a missing/corrupt entry falls back to the
+    // session default (off), matching the pre-3.1 behaviour.
+    m_diagnosticsAction->setChecked(s.value(clivus::settings::kDiagnostics, false).toBool());
+}
+
+void MainWindow::resetLayout()
+{
+    // The same constants construction uses, so the menu and a fresh start agree by construction.
+    resize(clivus::settings::kDefaultWindowSize);
+    m_splitter->setSizes(clivus::settings::kDefaultSplitterSizes);
+    m_seriesList->setVisible(true);
+    m_diagnosticsAction->setChecked(false);
+    // Store immediately: the reset must not be undone by the close handler writing the pre-reset
+    // state back (the closeEvent runs after this and will re-save whatever is now on screen).
+    saveLayout();
+    statusBar()->showMessage("Layout restored to the built-in default", 5000);
 }
 
 // One place that knows the active tool. The checked action is already the single truth in the UI - this
@@ -465,6 +631,7 @@ void MainWindow::scanFinished()
         // metadata (roadmap 1.3 / 3.5). The description and modality line are enough to pick a series.
         item->setToolTip(seriesLabel(s));
     }
+    applySeriesFilter();   // roadmap 3.2: a query typed before the scan finished still applies
 
     if (m_series.empty()) {
         setIdleProgress();
@@ -537,6 +704,10 @@ void MainWindow::fillReadyThumbnails()
 void MainWindow::pumpSlice()
 {
     if (m_sliceInFlight || m_currentSeries < 0 || m_desiredSlice < 0) return;
+    // Roadmap 3.5: a slice that already failed is not retried on its own — that would spin the
+    // decode pool (pump → fail → pump) on a permanently broken file. The failure is cleared only
+    // when the user picks a slice that previously succeeded, i.e. by moving away first.
+    if (m_failedSlice == m_desiredSlice) return;
     const auto& series = m_series[size_t(m_currentSeries)];
     if (m_desiredSlice >= series.totalFrames() || m_desiredSlice == m_currentSlice) return;
 
@@ -575,7 +746,11 @@ void MainWindow::sliceFinished()
         m_status->setText("This slice could not be decoded — the file may be unsupported or "
                           "damaged. Try another slice or series; the rest of the application "
                           "remains usable.");
-        pumpSlice();
+        // Roadmap 3.5: a failed decode must not retry itself. Only chase a NEW target: re-pumping
+        // the same index would spin the decode pool forever on a permanently broken file, and
+        // pumpSlice() refuses an index the previous attempt failed on (m_failedSlice), so the next
+        // wheel step / slider move / selection change is what restarts it.
+        if (m_desiredSlice != r.index) pumpSlice();
         return;
     }
     // A fast spin leaves the wheel ahead of what is being decoded; painting this one would flash a
@@ -606,18 +781,30 @@ void MainWindow::sliceFinished()
 
 void MainWindow::cancelLoading()
 {
+    // Roadmap 3.5: cancel is a first-class path, not an error. Everything queued is retired in one
+    // move; the one decode/scan currently executing is left to finish and be dropped by the epoch
+    // check in sliceFinished/scanFinished, so no result can land after the user cancelled.
     if (m_scanControl) m_scanControl->cancel = true;
-    if (m_thumbWatcher->isRunning()) m_thumbWatcher->cancel();   // queued thumbnails are dropped
-    setIdleProgress();
-    if (m_scanWatcher->isRunning()) {
-        m_status->setText("Cancelling — the scan stops after the object it is currently reading; you can keep using the application meanwhile.");
+    const bool scanRunning = m_scanWatcher->isRunning();
+    const bool thumbsRunning = m_thumbWatcher->isRunning();
+    if (thumbsRunning) m_thumbWatcher->cancel();
+    setIdleProgress();   // no stuck indicators regardless of which runs unwind below
+
+    if (scanRunning) {
+        m_status->setText(
+            "Cancelling — the scan stops after the object it is currently reading; meanwhile the "
+            "application remains usable, and you can open any other folder.");
         return;
     }
-    if (m_series.empty()) {
-        m_status->setText("Cancelled — nothing was loaded. You can open a folder again at any time.");
+    if (thumbsRunning) {
+        m_status->setText(
+            "Previews cancelled — series remain openable as before; the selected series keeps "
+            "decoding normally.");
+        updateInfo();
         return;
     }
-    updateInfo();
+    // Nothing is in flight: cancel must not lie about work by claiming it stopped any.
+    m_status->setText("Ready");
 }
 
 void MainWindow::setIdleProgress()
@@ -682,6 +869,59 @@ void MainWindow::startBenchmark()
     timer->start();
 }
 
+// Roadmap 3.2. One writer of the list's visibility state: rows whose visible text (the description
+// plus the modality/count/dimensions line) contains the query are shown, the rest are hidden. The
+// rows and their thumbnails are never rebuilt or reordered, so background loading is unaffected;
+// the current selection stays if it matches. An empty query is the unfiltered list. When no row
+// matches, a single disabled placeholder row says so instead of leaving a silent empty pane.
+void MainWindow::applySeriesFilter()
+{
+    if (!m_seriesList) return;
+    const QString query = m_seriesSearch ? m_seriesSearch->text().trimmed() : QString();
+    const bool filtering = !query.isEmpty();
+
+    // Count first: the placeholder (marked with UserRole+1) is removed whenever it is no longer
+    // needed — a non-empty query with matches, or a cleared query.
+    int matches = 0;
+    if (filtering) {
+        for (int i = 0; i < m_seriesList->count(); ++i) {
+            const QListWidgetItem* item = m_seriesList->item(i);
+            if (item && !item->data(Qt::UserRole + 1).toBool() &&
+                item->text().contains(query, Qt::CaseInsensitive)) ++matches;
+        }
+    }
+    if (m_seriesList->item(0) && m_seriesList->item(0)->data(Qt::UserRole + 1).toBool() &&
+        (!filtering || matches > 0)) {
+        QListWidgetItem* stale = m_seriesList->takeItem(0);
+        delete stale;
+    }
+
+    int matchesFound = matches;   // the pre-count above; recounted below over non-placeholder rows
+    QListWidgetItem* current = m_seriesList->currentItem();
+    for (int i = 0; i < m_seriesList->count(); ++i) {
+        QListWidgetItem* item = m_seriesList->item(i);
+        if (!item) continue;
+        if (item->data(Qt::UserRole + 1).toBool()) { item->setHidden(!filtering); continue; }
+        const bool match = item->text().contains(query, Qt::CaseInsensitive);
+        item->setHidden(filtering && !match);
+    }
+    if (filtering && matchesFound == 0) {
+        auto* placeholder = new QListWidgetItem("(no matching series)");
+        placeholder->setData(Qt::UserRole + 1, true);   // marks the row as the placeholder
+        placeholder->setFlags(Qt::NoItemFlags);         // not selectable, not focusable
+        placeholder->setForeground(palette().color(QPalette::Disabled, QPalette::Text));
+        m_seriesList->insertItem(0, placeholder);
+    }
+    // The selection stays visible when it matches: setCurrentItem on a hidden item would jump
+    // elsewhere, so only re-anchor when the current row has been hidden away.
+    if (current && current->isHidden() && matchesFound > 0) {
+        for (int i = 0; i < m_seriesList->count(); ++i) {
+            QListWidgetItem* item = m_seriesList->item(i);
+            if (item && !item->isHidden()) { m_seriesList->setCurrentItem(item); break; }
+        }
+    }
+}
+
 void MainWindow::showSeries(int index)
 {
     if (index < 0 || index >= int(m_series.size())) return;
@@ -698,6 +938,7 @@ void MainWindow::showSeries(int index)
     }
 
     ++m_epoch;              // a decode still running belongs to the series we are leaving
+    m_failedSlice = -1;     // new series, fresh failure tracking (roadmap 3.5)
     m_currentSeries = index;
     m_currentSlice = -1;    // nothing decoded for this series yet
     m_timing.clear();

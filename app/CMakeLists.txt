@@ -16,6 +16,28 @@ qt_add_executable(clivus
 target_link_libraries(clivus PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent OpenGL::GL)
 set_target_properties(clivus PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE OFF)
 
+# Roadmap 3.1 offscreen roundtrip harness: QApplication + QWidget only (the canvas never paints),
+# so it runs headlessly under ctest on any CI box.
+qt_add_executable(clivus_test_settings_roundtrip test_settings_roundtrip.cpp main_window.cpp help_window.cpp canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_settings_roundtrip PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent)
+add_test(NAME settings_roundtrip COMMAND clivus_test_settings_roundtrip)
+set_tests_properties(settings_roundtrip PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Roadmap 3.2 offscreen filter harness: drives the real scan path with the synthetic corpus and
+# then exercises the search box like a user would.
+qt_add_executable(clivus_test_series_filter test_series_filter.cpp main_window.cpp help_window.cpp canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_series_filter PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent)
+add_test(NAME series_filter COMMAND clivus_test_series_filter "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(series_filter PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Roadmap 3.5 offscreen error-recovery harness: drives the real scan/decode paths against an empty
+# folder and deliberately corrupted copies, and asserts readable failures, no stuck indicators, and
+# recovery without restart.
+qt_add_executable(clivus_test_error_paths test_error_paths.cpp main_window.cpp help_window.cpp canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_error_paths PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent)
+add_test(NAME error_paths COMMAND clivus_test_error_paths "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(error_paths PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # VTK probe: off by default. It needs VTK 9 with the volume rendering modules and no Qt, so it can run
 # on any box where VTK is installed, including the Windows artifact builder.
 option(CLIVUS_BUILD_VTK_PROBE "Build the headless VTK volume-rendering probe" OFF)

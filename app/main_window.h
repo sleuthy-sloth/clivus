@@ -9,6 +9,7 @@
 #include "clivus/image_frame.h"
 #include "clivus/index_store.h"
 #include "clivus/series_index.h"
+#include "settings_names.h"
 
 class CanvasWidget;
 class HelpWindow;
@@ -17,8 +18,10 @@ class WindowLevelBar;
 class WindowPresetBar;
 class QAction;
 class QActionGroup;
+class QCloseEvent;
 class QLabel;
 class QListWidget;
+class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QSplitter;
@@ -32,6 +35,10 @@ public:
 
     void openFolder(const QString& dir);
     void runBenchmark(int frames, int seriesRow = 0);
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;   // roadmap 3.4: Escape in the search box
 
 private:
     enum class ActiveTool { WindowLevel, Pan, Pointer };
@@ -68,7 +75,12 @@ private:
     void showManual();
     void showAbout();
     void setActiveTool(ActiveTool tool);   // one source of truth: toolbar, menu, cursor, hint
+    void saveLayout();     // roadmap 3.1: geometry/splitter/sidebar/diagnostics on close
+    void restoreLayout();  // roadmap 3.1: guarded restore with built-in fallbacks
+    void resetLayout();    // roadmap 3.1: View ▸ Reset Layout back to the built-in default
+    void applySeriesFilter();   // roadmap 3.2: hide/show rows from the search text
 
+    QLineEdit* m_seriesSearch = nullptr;   // roadmap 3.2: filters the list by description/modality
     QListWidget* m_seriesList = nullptr;
     QSplitter* m_splitter = nullptr;
     QStackedWidget* m_centralStack = nullptr;
@@ -90,7 +102,8 @@ private:
     QAction* m_windowAction = nullptr;
     QAction* m_panAction = nullptr;
     QAction* m_pointerAction = nullptr;
-    bool m_showDiagnostics = false;   // session-only: timings go away when the app restarts
+    QAction* m_diagnosticsAction = nullptr;   // kept for layout save/restore (roadmap 3.1)
+    bool m_showDiagnostics = false;   // persisted (roadmap 3.1): the toggle survives a restart
     std::vector<clivus::SeriesInfo> m_series;
     QString m_folder;
     int m_currentSeries = -1;
@@ -113,6 +126,7 @@ private:
     QFutureWatcher<SliceResult>* m_sliceWatcher = nullptr;
     quint64 m_epoch = 0;       // bumped when the on-screen series changes; stale decodes are dropped
     int m_desiredSlice = -1;   // where the wheel wants to be; decodes catch up to it one at a time
+    int m_failedSlice = -1;    // last slice a decode failed on: pumpSlice() refuses to auto-retry it
     bool m_sliceInFlight = false;
     int m_benchFrames = 0;     // pending --bench request, honoured once the first slice is on screen
     int m_benchRow = 0;

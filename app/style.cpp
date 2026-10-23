@@ -36,11 +36,15 @@ void apply(QApplication& app)
                               "QToolBar { spacing: %2px; padding: %2px; border: none; } "
                               "QToolButton { padding: 4px 8px; border-radius: 3px; } "
                               "QToolButton:hover { background: #3a4047; } "
-                              "QToolButton:focus { border: 1px solid #3d6b8f; } "
+                              "QToolButton:focus { border: 1px solid #7d9dbd; } "
                               "QListWidget { border: 1px solid #464b52; padding: 2px; } "
                               "QListWidget::item { padding: 4px; border-radius: 3px; } "
                               "QListWidget::item:hover { background: #3a4047; } "
-                              "QListWidget::item:selected { background: #3d6b8f; color: #f2f2f2; } "
+                              "QListWidget::item:selected { background: #3d6b8f; color: #f2f2f2; "
+                              "border: 1px solid #7d9dbd; font-weight: bold; } "
+                              "QListWidget::item:focus { border: 1px solid #7d9dbd; background: #3a4047; } "
+                              "QLineEdit:focus { border: 1px solid #7d9dbd; } "
+                              "QPushButton:focus { border: 1px solid #7d9dbd; } "
                               "QStatusBar { border-top: 1px solid #464b52; } "
                               "QMenu { border: 1px solid #464b52; }")
                           .arg(9)

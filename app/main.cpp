@@ -35,7 +35,7 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     QApplication::setApplicationName("Clivus");
     QApplication::setApplicationVersion(CLIVUS_VERSION);
-    QApplication::setOrganizationName("clivus");
+    QApplication::setOrganizationName("sleuthy-sloth");   // matches app/settings_names.h
     clivus::style::apply(app);
 
     QCommandLineParser parser;
