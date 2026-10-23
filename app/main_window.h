@@ -21,6 +21,7 @@ class QActionGroup;
 class QCloseEvent;
 class QLabel;
 class QListWidget;
+class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QSplitter;
@@ -32,10 +33,11 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
-protected:
-    void closeEvent(QCloseEvent* event) override;
     void openFolder(const QString& dir);
     void runBenchmark(int frames, int seriesRow = 0);
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     enum class ActiveTool { WindowLevel, Pan, Pointer };
@@ -75,7 +77,9 @@ private:
     void saveLayout();     // roadmap 3.1: geometry/splitter/sidebar/diagnostics on close
     void restoreLayout();  // roadmap 3.1: guarded restore with built-in fallbacks
     void resetLayout();    // roadmap 3.1: View ▸ Reset Layout back to the built-in default
+    void applySeriesFilter();   // roadmap 3.2: hide/show rows from the search text
 
+    QLineEdit* m_seriesSearch = nullptr;   // roadmap 3.2: filters the list by description/modality
     QListWidget* m_seriesList = nullptr;
     QSplitter* m_splitter = nullptr;
     QStackedWidget* m_centralStack = nullptr;

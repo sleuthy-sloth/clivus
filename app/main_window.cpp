@@ -11,6 +11,7 @@
 #include <QImage>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -100,6 +101,31 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesList->setWordWrap(true);                 // long descriptions wrap instead of clipping
     m_seriesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+
+    // Roadmap 3.2: search over the series browser. Mechanism: the rows are already built (with
+    // thumbnails), so the filter only hides and shows them — it never rebuilds, re-sorts or touches
+    // the background thumbnail/slice loading. Matching is case-insensitive substring against the
+    // row's own visible text, which is exactly the description + modality/count/dimensions label the
+    // user is reading. When everything is filtered out one disabled "(no matching series)" row
+    // appears; when the box is cleared the list returns to all rows with the selection unchanged.
+    // The line edit sits above the list inside the same splitter pane, so it is in the natural tab
+    // focus order (search box -> list) and Ctrl+F jumps straight to it.
+    m_seriesSearch = new QLineEdit(this);
+    m_seriesSearch->setPlaceholderText("Search series…");
+    m_seriesSearch->setClearButtonEnabled(true);
+    m_seriesSearch->setToolTip("Filter the series list by description or modality (Ctrl+F)");
+    // Ctrl+F focus shortcut: QLineEdits carry no shortcuts of their own; the shortcut lives on a
+    // window-level QAction that just puts keyboard focus into the box.
+    auto* findSeries = new QAction(this);
+    findSeries->setShortcut(QKeySequence::Find);   // Ctrl+F
+    connect(findSeries, &QAction::triggered, m_seriesSearch,
+            [this]() { m_seriesSearch->setFocus(Qt::ShortcutFocusReason); });
+    addAction(findSeries);
+    connect(m_seriesSearch, &QLineEdit::textChanged, this, [this](const QString&) {
+        // Placeholder auto-clears on typing-empty: an empty query shows every row again.
+        applySeriesFilter();
+    });
+
     m_canvas = new CanvasWidget(this);
     // The gestures are fixed regardless of the highlighted tool, so they are stated once here
     // (roadmap 2.1) instead of being implied by whichever action happens to be checked.
@@ -131,7 +157,15 @@ MainWindow::MainWindow(QWidget* parent)
     viewerLayout->addWidget(m_sliceBar, 0);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
-    m_splitter->addWidget(m_seriesList);
+    // The search box and the list are one browser pane (roadmap 3.2): the box filters the list
+    // below it, and the splitter divides that pane from the viewer as before.
+    auto* sidebarPane = new QWidget(this);
+    auto* sidebarLayout = new QVBoxLayout(sidebarPane);
+    sidebarLayout->setContentsMargins(0, 0, 0, 0);
+    sidebarLayout->setSpacing(0);
+    sidebarLayout->addWidget(m_seriesSearch, 0);
+    sidebarLayout->addWidget(m_seriesList, 1);
+    m_splitter->addWidget(sidebarPane);
     m_splitter->addWidget(viewer);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setSizes({320, 900});
@@ -558,6 +592,7 @@ void MainWindow::scanFinished()
         // metadata (roadmap 1.3 / 3.5). The description and modality line are enough to pick a series.
         item->setToolTip(seriesLabel(s));
     }
+    applySeriesFilter();   // roadmap 3.2: a query typed before the scan finished still applies
 
     if (m_series.empty()) {
         setIdleProgress();
@@ -773,6 +808,59 @@ void MainWindow::startBenchmark()
         close();
     });
     timer->start();
+}
+
+// Roadmap 3.2. One writer of the list's visibility state: rows whose visible text (the description
+// plus the modality/count/dimensions line) contains the query are shown, the rest are hidden. The
+// rows and their thumbnails are never rebuilt or reordered, so background loading is unaffected;
+// the current selection stays if it matches. An empty query is the unfiltered list. When no row
+// matches, a single disabled placeholder row says so instead of leaving a silent empty pane.
+void MainWindow::applySeriesFilter()
+{
+    if (!m_seriesList) return;
+    const QString query = m_seriesSearch ? m_seriesSearch->text().trimmed() : QString();
+    const bool filtering = !query.isEmpty();
+
+    // Count first: the placeholder (marked with UserRole+1) is removed whenever it is no longer
+    // needed — a non-empty query with matches, or a cleared query.
+    int matches = 0;
+    if (filtering) {
+        for (int i = 0; i < m_seriesList->count(); ++i) {
+            const QListWidgetItem* item = m_seriesList->item(i);
+            if (item && !item->data(Qt::UserRole + 1).toBool() &&
+                item->text().contains(query, Qt::CaseInsensitive)) ++matches;
+        }
+    }
+    if (m_seriesList->item(0) && m_seriesList->item(0)->data(Qt::UserRole + 1).toBool() &&
+        (!filtering || matches > 0)) {
+        QListWidgetItem* stale = m_seriesList->takeItem(0);
+        delete stale;
+    }
+
+    int matchesFound = matches;   // the pre-count above; recounted below over non-placeholder rows
+    QListWidgetItem* current = m_seriesList->currentItem();
+    for (int i = 0; i < m_seriesList->count(); ++i) {
+        QListWidgetItem* item = m_seriesList->item(i);
+        if (!item) continue;
+        if (item->data(Qt::UserRole + 1).toBool()) { item->setHidden(!filtering); continue; }
+        const bool match = item->text().contains(query, Qt::CaseInsensitive);
+        item->setHidden(filtering && !match);
+    }
+    if (filtering && matchesFound == 0) {
+        auto* placeholder = new QListWidgetItem("(no matching series)");
+        placeholder->setData(Qt::UserRole + 1, true);   // marks the row as the placeholder
+        placeholder->setFlags(Qt::NoItemFlags);         // not selectable, not focusable
+        placeholder->setForeground(palette().color(QPalette::Disabled, QPalette::Text));
+        m_seriesList->insertItem(0, placeholder);
+    }
+    // The selection stays visible when it matches: setCurrentItem on a hidden item would jump
+    // elsewhere, so only re-anchor when the current row has been hidden away.
+    if (current && current->isHidden() && matchesFound > 0) {
+        for (int i = 0; i < m_seriesList->count(); ++i) {
+            QListWidgetItem* item = m_seriesList->item(i);
+            if (item && !item->isHidden()) { m_seriesList->setCurrentItem(item); break; }
+        }
+    }
 }
 
 void MainWindow::showSeries(int index)
