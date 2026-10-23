@@ -4,6 +4,7 @@
 #include "clivus/codecs.h"
 
 #include <dcmtk/dcmdata/dctk.h>
+#include <dcmtk/dcmimage/diregist.h>   // registers the colour image classes with DicomImage
 #include <dcmtk/dcmimgle/dcmimage.h>
 #include <dcmtk/dcmimgle/dimopx.h>
 
@@ -291,6 +292,17 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
     Float64 v = 0;
     if (ds->findAndGetFloat64(DCM_RescaleSlope, v).good()) slope = float(v);
     if (ds->findAndGetFloat64(DCM_RescaleIntercept, v).good()) intercept = float(v);
+    if (!ds->tagExistsWithValue(DCM_RescaleSlope)) {
+        // RT Dose carries no rescale tags: the modality transform is DoseGridScaling alone, a
+        // multiplier from stored values to Gy. anyVRString because the corpus object (and real RT
+        // Dose from some writers) carries it as VR=UN. Units land in Gy, which is what the window
+        // numbers then show.
+        const std::string dose = anyVRString(ds, DCM_DoseGridScaling);
+        if (!dose.empty()) {
+            const double d = std::strtod(dose.c_str(), nullptr);
+            if (d > 0) slope = float(d);
+        }
+    }
 
     // PixelPaddingValue is US or SS; DCMTK's accessors are VR-strict (Sint32 refuses SS),
     // so branch on the VR actually present in the file.

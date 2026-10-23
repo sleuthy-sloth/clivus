@@ -151,6 +151,11 @@ int main(int argc, char** argv)
             expect(first.pixels != last.pixels && mid.pixels != last.pixels, "the frames differ from each other");
             expect(okPast && beyond.frameIndex == 14, "an out-of-range index clamps to the last frame");
             expect(beyond.pixels == last.pixels, "the clamped decode is the last frame's pixels");
+            // DoseGridScaling (1e-06 Gy here) is the modality transform of an RT Dose, which carries
+            // no rescale tags: the pixels must land in Gy — a dose of a few Gy, not the raw stored
+            // counts (which ran to six figures before this was applied).
+            expect(first.maxValue > 0.0f && first.maxValue < 10.0f,
+                   "RT Dose values are scaled into Gy by DoseGridScaling");
             std::printf("\nmulti-frame: 15-frame 32-bit RT Dose | frame 0 range [%.0f, %.0f] | "
                         "frame 14 range [%.0f, %.0f]\n",
                         first.minValue, first.maxValue, last.minValue, last.maxValue);
