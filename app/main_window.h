@@ -14,6 +14,7 @@ class CanvasWidget;
 class HelpWindow;
 class SliceBar;
 class WindowLevelBar;
+class WindowPresetBar;
 class QLabel;
 class QListWidget;
 class QProgressBar;
@@ -71,6 +72,7 @@ private:
     CanvasWidget* m_canvas = nullptr;
     SliceBar* m_sliceBar = nullptr;
     WindowLevelBar* m_windowBar = nullptr;
+    WindowPresetBar* m_presetBar = nullptr;
     QLabel* m_status = nullptr;
     QProgressBar* m_progress = nullptr;
     QPushButton* m_cancel = nullptr;

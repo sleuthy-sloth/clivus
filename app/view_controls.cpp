@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "view_controls.h"
 
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -147,7 +148,8 @@ WindowLevelBar::WindowLevelBar(QWidget* parent)
     layout->addWidget(m_width);
     layout->addWidget(m_error);
     layout->addWidget(m_note);
-    layout->addStretch(1);
+    // No trailing stretch: the options bar that owns this widget adds one, so the preset combo can sit
+    // to the right of the numeric fields on the same line.
 
     for (auto* field : {m_center, m_width}) {
         connect(field, &QLineEdit::editingFinished, this, &WindowLevelBar::commit);
@@ -249,4 +251,115 @@ void WindowLevelBar::clearError()
     m_error->clear();
     m_center->setProperty("invalid", false);
     m_width->setProperty("invalid", false);
+}
+
+namespace {
+
+// Viewing conventions, not clinical recommendations (roadmap 2.3). These are the numbers radiology
+// reading software has used for decades to *look at* CT and MR: they are starting points for
+// inspection, not validated diagnostic settings, and none of them is appropriate for every modality.
+// The numeric values and their intent are spelled out here and shown in the combo's tooltip so the
+// interface does not present a name without its numbers.
+struct Preset {
+    const char* name;
+    double center;
+    double width;
+    const char* note;
+};
+
+const Preset kPresets[] = {
+    {"Soft Tissue", 40.0, 400.0, "abdominal/soft-tissue CT viewing convention"},
+    {"Lung", -600.0, 1500.0, "lung parenchyma CT viewing convention"},
+    {"Bone", 300.0, 1500.0, "bone CT viewing convention"},
+    {"Brain", 40.0, 80.0, "brain CT viewing convention"},
+    {"Liver", 60.0, 160.0, "liver CT viewing convention"},
+    // MR has no modality-defined units at all: the values are whatever the scanner wrote, so this is
+    // a generic mid-range starting point, not an MRI standard.
+    {"MRI Default", 450.0, 900.0, "generic MR starting point (MR intensities are not standardized)"},
+};
+constexpr int kPresetCount = int(sizeof(kPresets) / sizeof(kPresets[0]));
+
+bool sameValue(double a, double b) { return std::abs(a - b) < 0.05; }
+
+}  // namespace
+
+WindowPresetBar::WindowPresetBar(QWidget* parent)
+    : QWidget(parent)
+{
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* label = new QLabel("Preset", this);
+    m_combo = new QComboBox(this);
+    m_combo->setToolTip("Window/level viewing conventions, not diagnostic settings. "
+                        "Picking one sets Window Center and Window Width; changing them afterwards "
+                        "shows '(custom)'.");
+    m_combo->addItem("(select preset)", QVariant());
+    for (int i = 0; i < kPresetCount; ++i) {
+        // Each entry carries its numbers, so the tooltip can be specific rather than promising
+        // something the value does not deliver.
+        m_combo->addItem(QString::fromLatin1(kPresets[i].name), i);
+        m_combo->setItemData(
+            i + 1,
+            QString("%1 — WC %2, WW %3. Viewing convention, not a diagnostic setting.")
+                .arg(QString::fromLatin1(kPresets[i].note))
+                .arg(kPresets[i].center)
+                .arg(kPresets[i].width),
+            Qt::ToolTipRole);
+    }
+    m_combo->addItem("(custom)", -1);
+    label->setBuddy(m_combo);
+
+    m_note = new QLabel(this);
+    m_note->setStyleSheet("color: #9a9fa6;");
+    m_note->hide();
+
+    layout->addWidget(label);
+    layout->addWidget(m_combo);
+    layout->addWidget(m_note);
+
+    connect(m_combo, QOverload<int>::of(&QComboBox::activated), this, &WindowPresetBar::choose);
+    m_combo->setCurrentIndex(0);
+}
+
+void WindowPresetBar::choose(int index)
+{
+    if (m_updating) return;
+    const QVariant data = m_combo->itemData(index);
+    if (!data.isValid() || data.toInt() < 0) return;   // placeholder or "(custom)": nothing to apply
+    const Preset& p = kPresets[data.toInt()];
+    emit presetChosen(p.center, p.width);
+}
+
+void WindowPresetBar::syncTo(double center, double width)
+{
+    if (!m_available) return;
+    m_updating = true;
+    int match = -1;
+    for (int i = 0; i < kPresetCount; ++i) {
+        if (sameValue(kPresets[i].center, center) && sameValue(kPresets[i].width, width)) {
+            match = i;
+            break;
+        }
+    }
+    // A value that is not a named preset is shown as custom, never as the closest name: the combo
+    // must not claim the image is being viewed with settings it is not.
+    m_combo->setCurrentIndex(match >= 0 ? match + 1 : kPresetCount + 1);
+    m_updating = false;
+}
+
+void WindowPresetBar::setAvailable(bool available, const QString& reason)
+{
+    m_available = available;
+    m_combo->setEnabled(available);
+    if (!available) {
+        m_note->setText(reason);
+        m_note->setVisible(!reason.isEmpty());
+        m_updating = true;
+        m_combo->setCurrentIndex(0);
+        m_updating = false;
+    } else {
+        m_note->hide();
+    }
 }

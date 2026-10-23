@@ -8,6 +8,7 @@
 #include <QFileDialog>
 #include <QIcon>
 #include <QImage>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenuBar>
@@ -99,6 +100,16 @@ MainWindow::MainWindow(QWidget* parent)
     m_canvas = new CanvasWidget(this);
     m_sliceBar = new SliceBar(this);
     m_windowBar = new WindowLevelBar(this);
+    m_presetBar = new WindowPresetBar(this);
+
+    // One options bar: numeric window/level, then the preset selector, on the line above the image.
+    auto* optionsBar = new QWidget(this);
+    auto* optionsLayout = new QHBoxLayout(optionsBar);
+    optionsLayout->setContentsMargins(4, 0, 8, 0);
+    optionsLayout->setSpacing(clivus::style::kSpacing);
+    optionsLayout->addWidget(m_windowBar, 0);
+    optionsLayout->addWidget(m_presetBar, 0);
+    optionsLayout->addStretch(1);
 
     // Canvas plus the slice strip under it: one viewer page inside the splitter, so the sidebar
     // splitter still divides browser and image as before.
@@ -108,7 +119,7 @@ MainWindow::MainWindow(QWidget* parent)
     viewerLayout->setSpacing(0);
     // Options bar above the image, slice strip below it: the two controls the user reaches for most
     // often sit next to the picture rather than in a dialog (roadmap 2.2/2.5).
-    viewerLayout->addWidget(m_windowBar, 0);
+    viewerLayout->addWidget(optionsBar, 0);
     viewerLayout->addWidget(m_canvas, 1);
     viewerLayout->addWidget(m_sliceBar, 0);
 
@@ -301,9 +312,11 @@ MainWindow::MainWindow(QWidget* parent)
         m_width = w;
         m_windowLevel = QString("WC %1  WW %2").arg(c, 0, 'f', 1).arg(w, 0, 'f', 1);
         m_windowBar->setValues(c, w);
+        m_presetBar->syncTo(c, w);   // names the preset only while the numbers still match it
         updateInfo();
     });
     connect(m_windowBar, &WindowLevelBar::windowLevelEdited, this, &MainWindow::setWindowLevel);
+    connect(m_presetBar, &WindowPresetBar::presetChosen, this, &MainWindow::setWindowLevel);
     connect(m_canvas, &CanvasWidget::viewChanged, this, [this] { updateInfo(); });
     connect(m_canvas, &CanvasWidget::frameTiming, this,
             [this](double windowMs, double paintMs, double fps) {
@@ -515,6 +528,9 @@ void MainWindow::sliceFinished()
         !m_currentIsColour,
         m_currentIsColour ? QString("Window/level does not apply to colour images")
                           : QString());
+    m_presetBar->setAvailable(
+        !m_currentIsColour,
+        m_currentIsColour ? QString("Presets need a grayscale image") : QString());
     // The strip lands on the slice that actually arrived; if the wheel had moved on, the check above
     // already returned and the next decode will settle it.
     m_sliceBar->setCurrentSlice(r.index);

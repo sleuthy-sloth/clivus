@@ -4,6 +4,7 @@
 
 class QLabel;
 class QSlider;
+class QComboBox;
 class QLineEdit;
 
 // Slice navigation strip under the canvas (roadmap 2.5).
@@ -74,6 +75,35 @@ private:
     QLabel* m_note = nullptr;
     double m_lastCenter = 0.0;
     double m_lastWidth = 1.0;
+    bool m_available = true;
+    bool m_updating = false;
+};
+
+// Window/level preset selector (roadmap 2.3).
+//
+// Lives in the same options bar as the two numeric fields and shares their state: picking a preset
+// just emits values, exactly like a typed edit, so MainWindow has one code path for both. When the
+// numbers stop matching the chosen preset - because the user dragged or typed - the combo shows
+// "(custom)" instead of a name that is no longer true.
+class WindowPresetBar : public QWidget {
+    Q_OBJECT
+public:
+    explicit WindowPresetBar(QWidget* parent = nullptr);
+
+    // Called with the canonical values on every change. Selects the matching preset when the numbers
+    // are exactly a preset's, otherwise shows "(custom)".
+    void syncTo(double center, double width);
+    // True when a selection is meaningful: grayscale frame and something on screen.
+    void setAvailable(bool available, const QString& reason = {});
+
+signals:
+    void presetChosen(double center, double width);
+
+private:
+    void choose(int index);
+
+    QComboBox* m_combo = nullptr;
+    QLabel* m_note = nullptr;
     bool m_available = true;
     bool m_updating = false;
 };
