@@ -365,6 +365,17 @@ MainWindow::MainWindow(QWidget* parent)
     connect(clearMeasure, &QAction::triggered, this, [this] { m_canvas->clearMeasurements(); });
     tools->addAction(clearMeasure);
 
+    // First-round MPR: opt-in, labelled experimental, disabled honestly when the study reports no
+    // geometry (the entry knows the settled series rather than promising a broken window).
+    m_mprAction = new QAction("MPR (&research/experimental)", this);
+    m_mprAction->setEnabled(false);
+    m_mprAction->setToolTip("Three orthogonal planes (axial, coronal, sagittal) resliced through "
+                            "the scanner's own geometry. First round: nearest-neighbour, "
+                            "no interpolation across slices. Needs per-slice geometry.");
+    connect(m_mprAction, &QAction::triggered, this, &MainWindow::openMprView);
+    view->addAction(m_mprAction);
+    view->addSeparator();
+
     auto* help = menuBar()->addMenu("&Help");
     help->addAction(manual);
     help->addSeparator();
@@ -561,6 +572,15 @@ void MainWindow::resetLayout()
 // mirrors it into the cursor and the one-line hint so the three cannot drift (roadmap 2.1/2.6).
 // Switching tools changes feedback only; it never disables a gesture, so the user cannot get stuck in a
 // mode that does not do what they expect.
+void MainWindow::openMprView()
+{
+    if (m_currentSeries < 0 || m_currentSeries >= int(m_series.size())) return;
+    auto* view = new MprView(m_series[size_t(m_currentSeries)], this);
+    view->show();
+    view->raise();
+    view->activateWindow();
+}
+
 // A folder dropped anywhere on the window opens it; a single DICOM file opens its folder (the scan
 // reads every object in the folder; one file alone is not a study).
 void MainWindow::dragEnterEvent(QDragEnterEvent* event)
@@ -1063,6 +1083,10 @@ void MainWindow::showSeries(int index)
     m_canvas->setFrame(clivus::ImageFrame{});
     // The strip's range is the series' flat frame count, so a multi-frame object counts as the
     // slices it actually carries (the loader already flattens them).
+    // First-round MPR is honest about eligibility: a study whose objects did not all report
+    // IPP/IOP has no usable geometry, so the entry disables itself rather than opening a window
+    // that would render positions it does not actually have.
+    m_mprAction->setEnabled(clivus::hasUsableGeometry(m_series[size_t(index)]));
     m_sliceBar->setSliceCount(m_series[size_t(index)].totalFrames());
     m_sliceBar->setCurrentSlice(0);
     m_desiredSlice = 0;
@@ -1161,8 +1185,11 @@ void MainWindow::updateInfo(const QString& extra)
             auto alongDists = s.alongDistances();
             if (fileIndex < int(alongDists.size())) {
                 const double rel = alongDists[size_t(fileIndex)] - alongDists.front();
-                left << QString("slice position %+1 mm (rel. to first slice)")
-                            .arg(rel, 0, 'f', 1);
+                // Qt placeholders are %1, not printf's %+1 — the old string shipped the literal
+                // "%+1" to the overlay. Sign explicitly: +3.5 / -7.5 reads as a position offset.
+                const QString signedMm = (rel >= 0.0 ? QStringLiteral("+") : QString()) +
+                                         QString::number(rel, 'f', 1);
+                left << QStringLiteral("slice position %1 mm (rel. to first slice)").arg(signedMm);
             }
         }
     }

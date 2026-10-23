@@ -8,6 +8,8 @@
 
 #include "clivus/image_frame.h"
 #include "clivus/index_store.h"
+#include "mpr_view.h"
+
 #include "clivus/series_index.h"
 #include "settings_names.h"
 
@@ -40,6 +42,8 @@ public:
     enum class ActiveTool { WindowLevel, Pan, Pointer, Measure };
     void setActiveTool(ActiveTool tool);
     int prefetchIndex() const { return m_prefetchIndex; }   // test probe: the smooth-scroll slot
+    bool mprAvailable() const { return m_mprAction && m_mprAction->isEnabled(); }
+    void openMprForTest() { openMprView(); }
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -84,6 +88,7 @@ private:
     void showManual();
     void showAbout();
 private:   // one source of truth: toolbar, menu, cursor, hint
+    void openMprView();
     void saveLayout();     // roadmap 3.1: geometry/splitter/sidebar/diagnostics on close
     void restoreLayout();  // roadmap 3.1: guarded restore with built-in fallbacks
     void resetLayout();    // roadmap 3.1: View ▸ Reset Layout back to the built-in default
@@ -112,6 +117,7 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     QAction* m_panAction = nullptr;
     QAction* m_pointerAction = nullptr;
     QAction* m_measureAction = nullptr;
+    QAction* m_mprAction = nullptr;
     QAction* m_diagnosticsAction = nullptr;   // kept for layout save/restore (roadmap 3.1)
     bool m_showDiagnostics = false;   // persisted (roadmap 3.1): the toggle survives a restart
     std::vector<clivus::SeriesInfo> m_series;

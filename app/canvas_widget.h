@@ -40,6 +40,13 @@ public:
     void setPixelSpacing(double rowSpacingMm, double colSpacingMm);
     void clearMeasurements();
     int measurementCount() const;
+    // Hairline crosshairs in image-pixel coordinates in the current view, or (-1, -1) for none.
+    // Used by MPR's reference position; the canvas never computes geometry, it only draws.
+    void setCrosshair(int verticalPixel, int horizontalPixel) {
+        m_crosshairV = verticalPixel;
+        m_crosshairH = horizontalPixel;
+        update();
+    }
     bool hasValidFrame() const { return m_frame.valid(); }
     int distanceCount() const { return int(m_distances.size()); }
     // Test and state introspection: the committed measurement's mm and whether the header's
@@ -94,6 +101,7 @@ private:
     bool m_measureDragging = false;
     std::vector<QPointF> m_anglePending;   // 1 or 2 gathered clicks while an angle is in progress
     double m_spacingRow = 0.0, m_spacingCol = 0.0;
+    int m_crosshairV = -1, m_crosshairH = -1;
     int m_lastFrameIndex = -1;   // measurements belong to one slice: cleared when the index changes
     QString m_overlayLeft, m_overlayRight;   // drawn in paintGL; never intercepts the mouse
     std::vector<uint8_t> m_bytes;
