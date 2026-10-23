@@ -209,12 +209,15 @@ int main()
         setEnv("CLIVUS_CACHE_DIR", cache.string());
     }
 
-    // --- clearing
+    // --- clearing. The store is scoped and therefore closed first: POSIX unlinks an open file,
+    // Windows refuses to, and the test must exercise the same sequence the app uses.
     {
-        clivus::IndexStore store;
-        store.open(dir.string());
-        store.save(written);
-        clivus::IndexStore::clearCache(dir.string());
+        {
+            clivus::IndexStore store;
+            store.open(dir.string());
+            store.save(written);
+        }
+        expect(clivus::IndexStore::clearCache(dir.string()), "clearCache reports success");
         expect(!fs::exists(clivus::IndexStore::cachePathFor(dir.string())),
                "clearCache removes the cache file");
         clivus::IndexStore after;

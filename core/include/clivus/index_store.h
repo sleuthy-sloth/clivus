@@ -42,8 +42,10 @@ public:
     void close();
 
     // Removes the cache for this folder (and any legacy in-folder index this build replaced).
-    // Safe to call when no cache exists.
-    static void clearCache(const std::string& dataFolder);
+    // Safe to call when no cache exists. Returns false when a file could not be removed — on
+    // Windows an open database handle blocks deletion, so a caller that finds this false should
+    // say so rather than claim the cache was cleared.
+    static bool clearCache(const std::string& dataFolder);
 
     // The cache file path a folder maps to. Exposed for tests and for the "where is it" answer;
     // empty when no cache directory can be determined.

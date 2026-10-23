@@ -416,16 +416,30 @@ bool IndexStore::save(const std::vector<SeriesInfo>& series)
     return true;
 }
 
-void IndexStore::clearCache(const std::string& dataFolder)
+bool IndexStore::clearCache(const std::string& dataFolder)
 {
     std::error_code ec;
+    bool ok = true;
     const std::string path = cachePathFor(dataFolder);
     if (!path.empty()) {
-        fs::remove(path, ec);
-        fs::remove(path + "-wal", ec);
-        fs::remove(path + "-journal", ec);
+        for (const std::string& suffix : {std::string(), std::string("-wal"), std::string("-journal")}) {
+            const fs::path file = path + suffix;
+            std::error_code existsEc;
+            if (!fs::exists(file, existsEc)) continue;
+            std::error_code removeEc;
+            fs::remove(file, removeEc);
+            // POSIX unlinks an open file; Windows refuses. Report it instead of pretending.
+            if (removeEc) ok = false;
+        }
     }
-    fs::remove(legacyPathFor(dataFolder), ec);
+    const fs::path legacy = legacyPathFor(dataFolder);
+    std::error_code legacyExists;
+    if (fs::exists(legacy, legacyExists)) {
+        std::error_code legacyEc;
+        fs::remove(legacy, legacyEc);
+        if (legacyEc) ok = false;
+    }
+    return ok;
 }
 
 void IndexStore::close()

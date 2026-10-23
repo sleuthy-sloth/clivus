@@ -356,8 +356,11 @@ MainWindow::MainWindow(QWidget* parent)
     clearCache->setToolTip("Forget this folder's cached metadata (the next open re-reads the files)");
     connect(clearCache, &QAction::triggered, this, [this] {
         if (m_folder.isEmpty()) return;
-        clivus::IndexStore::clearCache(m_folder.toStdString());
-        statusBar()->showMessage("Index cache cleared for this folder; the next open rescans it", 5000);
+        if (clivus::IndexStore::clearCache(m_folder.toStdString()))
+            statusBar()->showMessage("Index cache cleared for this folder; the next open rescans it", 5000);
+        else
+            statusBar()->showMessage("The index cache could not be removed (it may be in use); "
+                                     "reopen the folder or close Clivus and delete it from the cache directory", 8000);
     });
     view->addAction(clearCache);
 
