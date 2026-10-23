@@ -56,6 +56,12 @@ qt_add_executable(clivus_test_mpr test_mpr.cpp main_window.cpp mpr_view.cpp bran
 target_link_libraries(clivus_test_mpr PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent OpenGL::GL)
 add_test(NAME mpr COMMAND clivus_test_mpr "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/volume" "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus/JPEG2000.dcm")
 set_tests_properties(mpr PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The manual alone: no canvas, no GL context needed, so this runs anywhere.
+qt_add_executable(clivus_test_help_search test_help_search.cpp help_window.cpp branding.cpp style.cpp)
+target_link_libraries(clivus_test_help_search PRIVATE clivus_core Qt6::Widgets)
+add_test(NAME help_search COMMAND clivus_test_help_search)
+set_tests_properties(help_search PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 set_tests_properties(error_paths PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # VTK probe: off by default. It needs VTK 9 with the volume rendering modules and no Qt, so it can run

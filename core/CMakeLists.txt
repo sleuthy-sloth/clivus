@@ -5,6 +5,7 @@ add_library(clivus_core STATIC
     src/codecs.cpp
     src/image_frame.cpp
     src/index_store.cpp
+    src/manual_search.cpp
     src/volume.cpp
     src/series_index.cpp
 )
@@ -46,6 +47,10 @@ add_test(NAME volume COMMAND clivus_test_volume "${CMAKE_CURRENT_SOURCE_DIR}/../
 add_executable(clivus_test_index_store tests/test_index_store.cpp)
 target_link_libraries(clivus_test_index_store PRIVATE clivus_core)
 add_test(NAME index_store COMMAND clivus_test_index_store)
+
+add_executable(clivus_test_manual_search tests/test_manual_search.cpp)
+target_link_libraries(clivus_test_manual_search PRIVATE clivus_core)
+add_test(NAME manual_search COMMAND clivus_test_manual_search)
 
 # Needs testdata/corpus: the scan is only interesting when there are objects to walk over.
 add_executable(clivus_test_scan tests/test_scan.cpp)

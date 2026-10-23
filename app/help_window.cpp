@@ -3,6 +3,8 @@
 
 #include <QHBoxLayout>
 #include <QLineEdit>
+#include "clivus/manual_search.h"
+
 #include <QListWidget>
 #include <QTextBrowser>
 #include <QVBoxLayout>
@@ -235,7 +237,7 @@ HelpWindow::HelpWindow(QWidget* parent)
     m_search = new QLineEdit(this);
     m_search->setPlaceholderText("Search the manual…");
     m_search->setClearButtonEnabled(true);
-    m_search->setToolTip("Filters the chapter list");
+    m_search->setToolTip("Search chapter titles and their text");
 
     m_text = new QTextBrowser(this);
     m_text->setOpenExternalLinks(false);   // the manual is fully offline
@@ -269,31 +271,63 @@ void HelpWindow::showChapter(int row)
     m_text->setHtml(QString("<h2>%1</h2>\n%2")
                         .arg(QString::fromUtf8(kChapters[chapter].title),
                              QString::fromUtf8(kChapters[chapter].body)));
-}
-
-// One writer of the visible chapters: rows whose text (title; bodies are short enough after the
-// title match) contains the query show; the rest hide; the current chapter stays selected while
-// it matches; the placeholder appears only when nothing matches.
-void HelpWindow::applySearch(const QString& query)
-{
-    const bool searching = !query.isEmpty();
-    int firstMatch = -1;
-    int visible = 0;
-    m_noMatches->setHidden(true);
-    for (int i = 0; i < m_nav->count(); ++i) {
-        if (m_nav->item(i) == m_noMatches) continue;
-        const bool match = !searching || m_nav->item(i)->text().contains(query, Qt::CaseInsensitive);
-        m_nav->item(i)->setHidden(!match);
-        if (match) {
-            ++visible;
-            if (firstMatch < 0) firstMatch = i;
+    // With an active query, jump to the first hit inside the article: the reader arrived here
+    // because of a phrase, so land on it instead of the top of the chapter.
+    const QString query = m_search->text().trimmed();
+    if (!query.isEmpty()) {
+        QTextCursor cursor = m_text->textCursor();
+        cursor.movePosition(QTextCursor::Start);
+        m_text->setTextCursor(cursor);
+        if (m_text->find(query, QTextDocument::FindCaseSensitively)) {
+            // find() already selected the first hit; it is visible as the current selection.
         }
     }
-    if (visible == 0) {
+}
+
+void HelpWindow::applySearch(const QString& query)
+{
+    // The matching rules live in core (clivus/manual_search.h) so they are testable without a GUI:
+    // title and visible body text, case-folded, markup stripped, whitespace collapsed.
+    const auto articles = articlesForSearch();
+    const auto hits = clivus::manual::matchingArticles(articles, query.toStdString());
+    std::vector<bool> visible(articles.size(), false);
+    for (const int hit : hits) visible[size_t(hit)] = true;
+
+    const bool searching = !query.trimmed().isEmpty();
+    m_noMatches->setHidden(true);
+    int chapter = 0;
+    for (int i = 0; i < m_nav->count(); ++i) {
+        QListWidgetItem* item = m_nav->item(i);
+        if (item == m_noMatches) continue;
+        const bool match = !searching || visible[size_t(chapter)];
+        item->setHidden(!match);
+        if (match) {
+            // Say why a body-only match is here: a short excerpt in the row's tooltip reads better
+            // than a chapter title that has no obvious connection to the query.
+            const std::string ex = clivus::manual::excerpt(articles[size_t(chapter)],
+                                                           query.toStdString());
+            item->setToolTip(ex.empty() ? QString() : QString::fromStdString(ex));
+        }
+        ++chapter;
+    }
+
+    if (hits.empty()) {
         m_noMatches->setHidden(false);
         m_nav->setCurrentRow(-1);
+        m_text->setPlainText(QString());
         return;
     }
     if (m_nav->currentRow() < 0 || m_nav->currentItem()->isHidden())
-        m_nav->setCurrentRow(firstMatch);
+        m_nav->setCurrentRow(hits.front());
+    // Re-render the open chapter so the highlight follows the query.
+    showChapter(m_nav->currentRow());
+}
+
+std::vector<clivus::manual::Article> HelpWindow::articlesForSearch() const
+{
+    std::vector<clivus::manual::Article> out;
+    out.reserve(sizeof(kChapters) / sizeof(kChapters[0]));
+    for (const auto& chapter : kChapters)
+        out.push_back({chapter.title, chapter.body});
+    return out;
 }

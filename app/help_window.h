@@ -2,6 +2,10 @@
 #pragma once
 #include <QDialog>
 
+#include "clivus/manual_search.h"
+
+#include <vector>
+
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
@@ -19,6 +23,7 @@ public:
 private:
     void showChapter(int row);
     void applySearch(const QString& query);
+    std::vector<clivus::manual::Article> articlesForSearch() const;
 
     QLineEdit* m_search = nullptr;
     QListWidget* m_nav = nullptr;
