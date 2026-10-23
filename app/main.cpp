@@ -10,6 +10,7 @@
 #include "clivus/version.h"
 
 #include "main_window.h"
+#include "style.h"
 
 int main(int argc, char** argv)
 {
@@ -35,6 +36,7 @@ int main(int argc, char** argv)
     QApplication::setApplicationName("Clivus");
     QApplication::setApplicationVersion(CLIVUS_VERSION);
     QApplication::setOrganizationName("clivus");
+    clivus::style::apply(app);
 
     QCommandLineParser parser;
     const QCommandLineOption bench("bench", "Render N frames headlessly and report timings.", "frames");

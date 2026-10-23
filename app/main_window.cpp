@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "main_window.h"
 
+#include "clivus/version.h"
+
 #include <QAction>
 #include <QDir>
 #include <QFileDialog>
@@ -9,11 +11,15 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStatusBar>
+#include <QToolBar>
+#include <QVBoxLayout>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtConcurrent/QtConcurrentRun>
@@ -22,6 +28,8 @@
 #include <cstdio>
 
 #include "canvas_widget.h"
+#include "help_window.h"
+#include "style.h"
 
 namespace {
 
@@ -43,21 +51,34 @@ QImage thumbnailImage(const QString& file)
     return img.copy().scaled(72, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
 
+// Series browser entry (roadmap 1.3): description prominent on the first line, then the
+// modality · count · dimensions line. Any missing field gets an explicit fallback, never a guess.
+QString seriesTitle(const clivus::SeriesInfo& s)
+{
+    const std::string& description =
+        !s.seriesDescription.empty() ? s.seriesDescription : s.studyDescription;
+    return description.empty() ? QString("(no description)")
+                               : QString::fromStdString(description);
+}
+
+QString seriesDetails(const clivus::SeriesInfo& s)
+{
+    QStringList parts;
+    if (!s.modality.empty()) parts << QString::fromStdString(s.modality);
+    // Frames only when they say something the object count does not: a 15-frame RT Dose is one
+    // object and fifteen slices, and the list should not pretend otherwise.
+    const int frames = s.totalFrames();
+    if (frames > int(s.files.size()))
+        parts << QString("%1 objects · %2 frames").arg(s.files.size()).arg(frames);
+    else
+        parts << QString("%1 images").arg(s.files.size());
+    if (s.width > 0 && s.height > 0) parts << QString("%1 × %2").arg(s.width).arg(s.height);
+    return parts.join(QLatin1String(" · "));
+}
+
 QString seriesLabel(const clivus::SeriesInfo& s)
 {
-    // Frames only when they say something the object count does not: a 15-frame RT Dose is one object
-    // and fifteen slices, and the list should not pretend otherwise.
-    const int frames = s.totalFrames();
-    const QString count = frames > int(s.files.size())
-                              ? QString("%1 objects · %2 frames").arg(s.files.size()).arg(frames)
-                              : QString("%1 objects").arg(s.files.size());
-    return QString("%1 · %2\n%3 · %4×%5")
-        .arg(QString::fromStdString(s.modality))
-        .arg(QString::fromStdString(s.seriesDescription.empty() ? s.studyDescription
-                                                              : s.seriesDescription))
-        .arg(count)
-        .arg(s.width)
-        .arg(s.height);
+    return QString("%1\n%2").arg(seriesTitle(s), seriesDetails(s));
 }
 
 }  // namespace
@@ -69,18 +90,20 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1280, 860);
 
     m_seriesList = new QListWidget(this);
-    m_seriesList->setIconSize(QSize(72, 72));
+    m_seriesList->setIconSize(QSize(clivus::style::kThumbSize, clivus::style::kThumbSize));
     m_seriesList->setUniformItemSizes(false);
+    m_seriesList->setWordWrap(true);                 // long descriptions wrap instead of clipping
+    m_seriesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_canvas = new CanvasWidget(this);
 
-    auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->addWidget(m_seriesList);
-    splitter->addWidget(m_canvas);
-    splitter->setStretchFactor(1, 1);
-    splitter->setSizes({320, 900});
-    setCentralWidget(splitter);
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_splitter->addWidget(m_seriesList);
+    m_splitter->addWidget(m_canvas);
+    m_splitter->setStretchFactor(1, 1);
+    m_splitter->setSizes({320, 900});
 
-    m_status = new QLabel("Open a folder of DICOM files (Ctrl+O)", this);
+    m_status = new QLabel("Ready", this);
     statusBar()->addWidget(m_status, 1);
 
     m_progress = new QProgressBar(this);
@@ -119,15 +142,138 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_sliceWatcher, &QFutureWatcherBase::finished, this, &MainWindow::sliceFinished);
 
     auto* open = new QAction("&Open folder…", this);
+    open->setIcon(QIcon::fromTheme("folder-open"));
+    open->setToolTip("Choose a folder of DICOM files to scan");
     open->setShortcut(QKeySequence::Open);
     connect(open, &QAction::triggered, this, [this] {
         const QString dir = QFileDialog::getExistingDirectory(this, "DICOM folder");
         if (!dir.isEmpty()) openFolder(dir);
     });
-    auto* quit = new QAction("&Quit", this);
+    auto* quit = new QAction("E&xit", this);
     quit->setShortcut(QKeySequence::Quit);
     connect(quit, &QAction::triggered, this, &QWidget::close);
-    menuBar()->addMenu("&File")->addActions({open, quit});
+
+    // Menu and toolbar share one QAction per command, so a shortcut cannot drift from the button
+    // wired to the same thing (roadmap 6.3). Each action drives behaviour that already exists.
+    auto* fit = new QAction("Fit &image", this);
+    fit->setIcon(QIcon::fromTheme("zoom-fit-best"));
+    fit->setToolTip("Scale the image to fit the canvas (keeps the aspect ratio)");
+    connect(fit, &QAction::triggered, m_canvas, &CanvasWidget::fitView);
+
+    auto* reset = new QAction("&Reset view", this);
+    reset->setIcon(QIcon::fromTheme("view-refresh"));
+    reset->setToolTip("Restore default zoom, pan and window/level (double-click or R on the canvas)");
+    connect(reset, &QAction::triggered, m_canvas, &CanvasWidget::resetView);
+
+    auto* wl = new QAction("&Window/Level", this);
+    wl->setIcon(QIcon::fromTheme("contrast"));
+    wl->setToolTip("Drag with the LEFT mouse button on the canvas: horizontal = width, vertical = centre");
+    // The gesture already exists on the canvas; the action itself just points to it, so the control
+    // never pretends to be a command it is not.
+    connect(wl, &QAction::triggered, this, [this] {
+        statusBar()->showMessage("Drag with the LEFT mouse button on the canvas to adjust window/level", 4000);
+    });
+
+    auto* pan = new QAction("&Pan", this);
+    pan->setIcon(QIcon::fromTheme("transform-move"));
+    pan->setToolTip("Drag with the RIGHT mouse button on the canvas to move the image");
+    connect(pan, &QAction::triggered, this, [this] {
+        statusBar()->showMessage("Drag with the RIGHT mouse button on the canvas to pan the image", 4000);
+    });
+
+    auto* sidebar = new QAction("&Series sidebar", this);
+    sidebar->setToolTip("Show or hide the series browser");
+    sidebar->setCheckable(true);
+    sidebar->setChecked(true);
+    connect(sidebar, &QAction::toggled, this, [this](bool on) {
+        m_seriesList->setVisible(on);
+        // Give the reclaimed space to the canvas: the image is the point.
+        m_splitter->setSizes(on ? QList<int>{320, 900} : QList<int>{0, 1220});
+    });
+
+    // Roadmap 1.5: timings are development information, not primary UI. Session-only by design —
+    // nothing is persisted, so a fresh session starts clean.
+    auto* diagnostics = new QAction("Show &diagnostics", this);
+    diagnostics->setToolTip("Show render timing details in the image overlay (this session only)");
+    diagnostics->setCheckable(true);
+    connect(diagnostics, &QAction::toggled, this, [this](bool on) {
+        m_showDiagnostics = on;
+        updateInfo();
+    });
+
+    auto* manual = new QAction("&User manual", this);
+    manual->setToolTip("Open the Clivus user manual");
+    manual->setShortcut(QKeySequence::HelpContents);   // F1
+    connect(manual, &QAction::triggered, this, &MainWindow::showManual);
+
+    auto* about = new QAction("&About Clivus", this);
+    about->setToolTip("Version, licence and research-use notice");
+    connect(about, &QAction::triggered, this, &MainWindow::showAbout);
+
+    auto* file = menuBar()->addMenu("&File");
+    file->addAction(open);
+    file->addSeparator();
+    file->addAction(quit);
+
+    auto* view = menuBar()->addMenu("&View");
+    view->addAction(fit);
+    view->addAction(reset);
+    view->addSeparator();
+    view->addAction(sidebar);
+    view->addSeparator();
+    view->addAction(diagnostics);
+
+    auto* help = menuBar()->addMenu("&Help");
+    help->addAction(manual);
+    help->addSeparator();
+    help->addAction(about);
+
+    auto* toolbar = addToolBar("main");
+    toolbar->setMovable(false);
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    toolbar->setIconSize(QSize(clivus::style::kIconSize, clivus::style::kIconSize));
+    for (auto* a : {open, fit, pan, wl, reset}) toolbar->addAction(a);
+
+    setMinimumSize(720, 480);   // narrower windows clip the toolbar and sidebar
+    // Empty state (roadmap 1.6): what Clivus does, a prominent way in, and a route to the manual.
+    // It is one page of a stack, so the main window never blocks waiting on it.
+    m_emptyState = new QWidget(this);
+    auto* emptyLayout = new QVBoxLayout(m_emptyState);
+    emptyLayout->addStretch(1);
+    auto* welcome = new QLabel("Welcome to Clivus", m_emptyState);
+    welcome->setAlignment(Qt::AlignCenter);
+    QFont heading = welcome->font();
+    heading.setPointSizeF(heading.pointSizeF() * 1.8);
+    heading.setBold(true);
+    welcome->setFont(heading);
+    auto* blurb = new QLabel(
+        "Clivus views DICOM medical image folders: scan a folder, browse its series, and examine "
+        "each slice. Intended for research and educational use.", m_emptyState);
+    blurb->setAlignment(Qt::AlignCenter);
+    blurb->setWordWrap(true);
+    auto* openButton = new QPushButton("Open Folder…", m_emptyState);
+    openButton->setToolTip("Choose a folder of DICOM files to scan (Ctrl+O)");
+    openButton->setMinimumWidth(180);
+    connect(openButton, &QPushButton::clicked, open, &QAction::trigger);
+    auto* manualLink = new QLabel(
+        QString("<a href=\"#manual\">User manual</a> (F1) explains the interface in detail"),
+        m_emptyState);
+    manualLink->setAlignment(Qt::AlignCenter);
+    connect(manualLink, &QLabel::linkActivated, this, [this] { showManual(); });
+    emptyLayout->addWidget(welcome);
+    emptyLayout->addSpacing(clivus::style::kSpacing);
+    emptyLayout->addWidget(blurb);
+    emptyLayout->addSpacing(clivus::style::kSpacing);
+    emptyLayout->addWidget(openButton, 0, Qt::AlignCenter);
+    emptyLayout->addSpacing(clivus::style::kSpacing);
+    emptyLayout->addWidget(manualLink);
+    emptyLayout->addStretch(2);
+
+    m_centralStack = new QStackedWidget(this);
+    m_centralStack->addWidget(m_emptyState);   // page 0: nothing open yet
+    m_centralStack->addWidget(m_splitter);     // page 1: folder open
+    setCentralWidget(m_centralStack);
+
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
@@ -136,6 +282,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_windowLevel = QString("WC %1  WW %2").arg(c, 0, 'f', 1).arg(w, 0, 'f', 1);
         updateInfo();
     });
+    connect(m_canvas, &CanvasWidget::viewChanged, this, [this] { updateInfo(); });
     connect(m_canvas, &CanvasWidget::frameTiming, this,
             [this](double windowMs, double paintMs, double fps) {
                 m_timing = QString("window %1 ms | paint %2 ms | %3 fps")
@@ -163,6 +310,8 @@ void MainWindow::openFolder(const QString& dir)
     m_timing.clear();
     m_windowLevel.clear();
     m_canvas->setFrame(clivus::ImageFrame{});   // black, rather than the old folder's image
+    m_centralStack->setCurrentIndex(1);         // off the empty state: the folder is being opened
+    m_status->setText("Loading series…");
     startScan();
 }
 
@@ -190,7 +339,7 @@ void MainWindow::startScan()
 void MainWindow::updateScanProgress()
 {
     if (!m_scanControl) return;
-    m_status->setText(QString("Scanning %1… %2 entries")
+    m_status->setText(QString("Loading series… scanning %1 (%2 entries examined so far)")
                           .arg(QDir::toNativeSeparators(m_folder))
                           .arg(m_scanControl->examined.load(std::memory_order_relaxed)));
 }
@@ -201,7 +350,9 @@ void MainWindow::scanFinished()
     ScanResult r = m_scanWatcher->result();
     if (r.cancelled) {
         setIdleProgress();
-        m_status->setText(QString("Scan cancelled — %1").arg(QDir::toNativeSeparators(m_folder)));
+        m_status->setText(
+            QString("Scan cancelled — the folder was left unread; you can open it again or pick "
+                    "another one. The application is still usable."));
         return;
     }
 
@@ -209,13 +360,19 @@ void MainWindow::scanFinished()
     m_seriesList->clear();
     for (const auto& s : m_series) {
         auto* item = new QListWidgetItem(seriesLabel(s), m_seriesList);
-        item->setToolTip(QString::fromStdString(s.patientName));
+        // Deliberately not the patient name: ordinary hover tooltips stay free of identifying
+        // metadata (roadmap 1.3 / 3.5). The description and modality line are enough to pick a series.
+        item->setToolTip(seriesLabel(s));
     }
 
     if (m_series.empty()) {
         setIdleProgress();
+        // Informative, not terminal: what happened, what to try, and the app is fine (roadmap 1.6).
         m_status->setText(
-            QString("No DICOM pixel data found in %1").arg(QDir::toNativeSeparators(m_folder)));
+            QString("No DICOM images were found in %1 — check that this is the right folder and "
+                    "that the files are DICOM objects with pixel data. You can open another folder "
+                    "at any time.")
+                .arg(QDir::toNativeSeparators(m_folder)));
         return;
     }
 
@@ -248,16 +405,28 @@ void MainWindow::fillReadyThumbnails()
 {
     const QFuture<QImage> future = m_thumbWatcher->future();
     const int count = future.resultCount();
-    int ready = 0;
+    int ready = 0, failed = 0;
     for (int i = 0; i < count; ++i) {
         if (!future.isResultReadyAt(i)) continue;
         ++ready;
         QListWidgetItem* item = m_seriesList->item(i);
-        if (!item || !item->icon().isNull()) continue;   // filled already, or the decode failed
+        if (!item) continue;
         const QImage image = future.resultAt(i);
-        if (image.isNull()) continue;                    // nothing decoded: leave the row iconless
+        if (image.isNull()) {
+            if (!item->icon().isNull()) continue;
+            // A thumbnail that cannot be decoded is a state the user should see, not a silent gap:
+            // say so on the row, plainly, without echoing any decoder's raw error text (roadmap 1.3).
+            item->setIcon(QIcon::fromTheme("image-missing"));
+            item->setData(Qt::UserRole, true);
+            ++failed;
+            continue;
+        }
         item->setIcon(QIcon(QPixmap::fromImage(image)));
     }
+    if (failed > 0)
+        statusBar()->showMessage(QString("%1 series could not be previewed — you can still open them")
+                                     .arg(failed),
+                                 8000);
     if (m_progress->maximum() > 0) m_progress->setValue(ready);
 }
 
@@ -285,7 +454,9 @@ void MainWindow::pumpSlice()
         r.ok = clivus::loadFrame(path, r.frame, frameIndex);
         return r;
     }));
-    updateInfo("decoding…");
+    m_status->setText(QString("Loading slice %1 / %2…")
+                          .arg(m_desiredSlice + 1)
+                          .arg(m_series[size_t(m_currentSeries)].totalFrames()));
 }
 
 void MainWindow::sliceFinished()
@@ -299,7 +470,11 @@ void MainWindow::sliceFinished()
         return;
     }
     if (!r.ok) {
-        m_status->setText("Failed to decode this slice");
+        // What happened, what to try, and the app is fine: other slices and series still work.
+        m_status->setText("This slice could not be decoded — the file may be unsupported or "
+                          "damaged. Try another slice or series; the rest of the application "
+                          "remains usable.");
+        pumpSlice();
         return;
     }
     // A fast spin leaves the wheel ahead of what is being decoded; painting this one would flash a
@@ -322,11 +497,11 @@ void MainWindow::cancelLoading()
     if (m_thumbWatcher->isRunning()) m_thumbWatcher->cancel();   // queued thumbnails are dropped
     setIdleProgress();
     if (m_scanWatcher->isRunning()) {
-        m_status->setText("Cancelling — the scan stops after the object it is reading");
+        m_status->setText("Cancelling — the scan stops after the object it is currently reading; you can keep using the application meanwhile.");
         return;
     }
     if (m_series.empty()) {
-        m_status->setText("Cancelled");
+        m_status->setText("Cancelled — nothing was loaded. You can open a folder again at any time.");
         return;
     }
     updateInfo();
@@ -404,7 +579,7 @@ void MainWindow::showSeries(int index)
         m_currentSeries = -1;
         m_currentSlice = -1;
         m_desiredSlice = -1;
-        m_status->setText("This series has no objects in the index");
+        m_status->setText("This series has no image objects in the index — try another series; the application remains usable.");
         return;
     }
 
@@ -449,13 +624,64 @@ void MainWindow::updateInfo(const QString& extra)
         const int frames = fileIndex < int(s.frameCounts.size()) ? s.frameCounts[size_t(fileIndex)] : 1;
         if (frames > 1) frameNote = QString("   frame %1/%2").arg(frameIndex + 1).arg(frames);
     }
-    QString text = QString("%1 — %2  [%3]   %4   %5")
-                       .arg(QString::fromStdString(s.patientName))
-                       .arg(position)
-                       .arg(QString::fromStdString(s.seriesDescription))
-                       .arg(m_windowLevel)
-                       .arg(m_timing);
-    text += frameNote;
-    if (!extra.isEmpty()) text += "   " + extra;
-    m_status->setText(text);
+
+    // Roadmap 1.4: viewing information on the canvas overlays, diagnostics only under the toggle.
+    // Top-left: what the series is. Top-right: how it is being viewed right now.
+    QStringList left;
+    const QString description = QString::fromStdString(
+        !s.seriesDescription.empty() ? s.seriesDescription : s.studyDescription);
+    if (!description.isEmpty()) left << description;
+    if (!s.modality.empty()) left << QString::fromStdString(s.modality);
+    if (s.width > 0 && s.height > 0) left << QString("%1 × %2").arg(s.width).arg(s.height);
+    left << position + frameNote;
+    if (!extra.isEmpty()) left << extra;
+
+    QString right;
+    if (m_currentIsColour) {
+        right = "colour frame — window/level not applied";
+    } else if (!m_windowLevel.isEmpty()) {
+        right = m_windowLevel;
+    }
+    const double zoom = m_canvas->zoomFactor();
+    if (zoom > 0.0) right += QString(right.isEmpty() ? "" : "   ") + QString("%1%").arg(int(zoom * 100.0));
+    if (m_showDiagnostics && !m_timing.isEmpty()) right += "\n" + m_timing;
+
+    m_canvas->setOverlay(left.join(QLatin1String("\n")), right);
+
+    // The status bar keeps only state, not a running technical string (roadmap 1.5).
+    QString status = QString("Slice %1 of %2 — %3")
+                         .arg(m_currentSlice < 0 ? QString("…") : QString::number(m_currentSlice + 1))
+                         .arg(total)
+                         .arg(description.isEmpty() ? QString("(no description)") : description);
+    if (!extra.isEmpty()) status += " — " + extra;
+    m_status->setText(status);
+}
+
+// Help and About arrive with the help-menu skeleton commit; the actions exist from the start so the
+// menus are complete, and these slots are where they land.
+void MainWindow::showManual()
+{
+    if (!m_help) m_help = new HelpWindow(this);
+    m_help->show();
+    m_help->raise();
+    m_help->activateWindow();
+}
+
+void MainWindow::showAbout()
+{
+    QMessageBox::about(this, "About Clivus",
+        QString("<b>Clivus %1</b><br><br>"
+                "A DICOM viewer.<br><br>"
+                "This program is free software: you can redistribute it and/or modify it under "
+                "the terms of the GNU General Public License as published by the Free Software "
+                "Foundation, either version 3 of the License, or (at your option) any later "
+                "version. This program is distributed in the hope that it will be useful, but "
+                "WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or "
+                "FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more "
+                "details.<br><br>"
+                "Clivus is intended for <b>research and educational use</b>. It is not a "
+                "substitute for a clinically validated diagnostic workstation, and its output "
+                "should not be relied upon for clinical decisions without appropriate "
+                "independent validation.")
+            .arg(QString::fromLatin1(CLIVUS_VERSION)));
 }

@@ -11,10 +11,13 @@
 #include "clivus/series_index.h"
 
 class CanvasWidget;
+class HelpWindow;
 class QLabel;
 class QListWidget;
 class QProgressBar;
 class QPushButton;
+class QSplitter;
+class QStackedWidget;
 class QTimer;
 
 class MainWindow : public QMainWindow {
@@ -53,13 +56,20 @@ private:
     void cancelLoading();
     void startBenchmark();
     void setIdleProgress();
+    void showManual();
+    void showAbout();
 
     QListWidget* m_seriesList = nullptr;
+    QSplitter* m_splitter = nullptr;
+    QStackedWidget* m_centralStack = nullptr;
+    QWidget* m_emptyState = nullptr;
+    HelpWindow* m_help = nullptr;
     CanvasWidget* m_canvas = nullptr;
     QLabel* m_status = nullptr;
     QProgressBar* m_progress = nullptr;
     QPushButton* m_cancel = nullptr;
     QTimer* m_scanTicker = nullptr;
+    bool m_showDiagnostics = false;   // session-only: timings go away when the app restarts
     std::vector<clivus::SeriesInfo> m_series;
     QString m_folder;
     int m_currentSeries = -1;

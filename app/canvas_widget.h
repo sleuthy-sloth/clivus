@@ -19,10 +19,16 @@ public:
 
     void setFrame(clivus::ImageFrame frame);   // resets window to the full dynamic range
     void resetView();
+    void fitView();   // zoom back to 1.0 (already fit to the viewport), keep pan and window
     void setWindowLevel(double center, double width);
+    // Overlay text the window composes; the canvas only draws it (roadmap 1.4). Empty parts are
+    // simply not drawn.
+    double zoomFactor() const { return m_zoom; }
+    void setOverlay(const QString& topLeft, const QString& topRight);
 
 signals:
     void windowChanged(double center, double width);
+    void viewChanged();                        // zoom or pan moved: overlays should refresh
     void scrollRequested(int delta);          // wheel: next/previous slice
     void frameTiming(double windowMs, double paintMs, double fps);
 
@@ -39,6 +45,7 @@ private:
     void uploadTexture();
 
     clivus::ImageFrame m_frame;
+    QString m_overlayLeft, m_overlayRight;   // drawn in paintGL; never intercepts the mouse
     std::vector<uint8_t> m_bytes;
     unsigned int m_tex = 0;
     // Size the texture storage was last allocated at. A window/level change keeps it, so the update

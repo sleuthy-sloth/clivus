@@ -9,6 +9,8 @@ qt_add_executable(clivus
     main.cpp
     main_window.cpp
     canvas_widget.cpp
+    help_window.cpp
+    style.cpp
 )
 target_link_libraries(clivus PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent OpenGL::GL)
 set_target_properties(clivus PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE OFF)
