@@ -2,6 +2,7 @@
 #include "main_window.h"
 
 #include "about_dialog.h"
+#include "series_summary.h"
 #include "branding.h"
 
 #include "clivus/version.h"
@@ -63,44 +64,6 @@ QImage thumbnailImage(const QString& file)
     // Qt keeps ownership of the buffer via the deleter, so copy the row bytes.
     QImage img(bytes.data(), frame.width, frame.height, frame.width * frame.channels, format);
     return img.copy().scaled(72, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-}
-
-// Series browser entry (roadmap 1.3): description prominent on the first line, then the
-// modality · count · dimensions line. Any missing field gets an explicit fallback, never a guess.
-QString seriesTitle(const clivus::SeriesInfo& s)
-{
-    const std::string& description =
-        !s.seriesDescription.empty() ? s.seriesDescription : s.studyDescription;
-    return description.empty() ? QString("(no description)")
-                               : QString::fromStdString(description);
-}
-
-QString seriesDetails(const clivus::SeriesInfo& s)
-{
-    QStringList parts;
-    if (!s.modality.empty()) parts << QString::fromStdString(s.modality);
-    // Frames only when they say something the object count does not: a 15-frame RT Dose is one
-    // object and fifteen slices, and the list should not pretend otherwise.
-    const int frames = s.totalFrames();
-    const auto plural = [](size_t n, const char* one, const char* many) {
-        return QString::fromUtf8(n == 1 ? one : many);
-    };
-    if (frames > int(s.files.size()))
-        parts << QString("%1 · %2 frames")
-                     .arg(plural(s.files.size(), "1 object", "%1 objects").arg(s.files.size()))
-                     .arg(frames);
-    else
-        parts << plural(s.files.size(), "1 image", "%1 images").arg(s.files.size());
-    if (s.width > 0 && s.height > 0) parts << QString("%1 × %2").arg(s.width).arg(s.height);
-    // QStringLiteral, not QLatin1String: the separator is a U+00B7 middle dot carried as UTF-8,
-    // and QLatin1String reinterprets its bytes as Latin-1, painting "Â·" in every series row on
-    // every platform (caught by the real macOS screenshot, invisible in the Pi's offscreen tests).
-    return parts.join(QStringLiteral(" · "));
-}
-
-QString seriesLabel(const clivus::SeriesInfo& s)
-{
-    return QString("%1\n%2").arg(seriesTitle(s), seriesDetails(s));
 }
 
 }  // namespace
@@ -750,10 +713,10 @@ void MainWindow::scanFinished()
     m_series = std::move(r.series);
     m_seriesList->clear();
     for (const auto& s : m_series) {
-        auto* item = new QListWidgetItem(seriesLabel(s), m_seriesList);
+        auto* item = new QListWidgetItem(clivus::ui::seriesLabel(s), m_seriesList);
         // Deliberately not the patient name: ordinary hover tooltips stay free of identifying
         // metadata (roadmap 1.3 / 3.5). The description and modality line are enough to pick a series.
-        item->setToolTip(seriesLabel(s));
+        item->setToolTip(clivus::ui::seriesLabel(s));
     }
     applySeriesFilter();   // roadmap 3.2: a query typed before the scan finished still applies
 

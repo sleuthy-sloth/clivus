@@ -1,7 +1,10 @@
 # Clivus Release Checklist
 
 A repeatable pre-release pass (roadmap §4). Tick through it for every tagged release.
-State below reflects v0.1.1 preparation — item-by-item, with how each was checked.
+State below reflects preparation through v0.1.5 — item-by-item, with how each was checked.
+
+Validation scope lives in [VALIDATION.md](VALIDATION.md): CI builds and packages Windows; nobody has
+launched the packaged exe on Windows hardware yet, and this checklist must not imply otherwise.
 
 ## 1. Functional regression — folder and study handling
 
@@ -109,3 +112,23 @@ release rather than considered "done".
   paths is recorded in code.
 - **PALETTE COLOR / non-linear LUT Sequences**: decode-as-stored; the limitation is documented in
   code + manual, not hidden.
+
+## 7. Privacy, cache and manual (added with the v0.1.5 pass)
+
+- [x] Cache lives outside the DICOM folder — `index_store` test asserts the path is under
+      `CLIVUS_CACHE_DIR`, that the filename does not contain the source path, and that a legacy
+      in-folder index is deleted on open.
+- [x] No patient names in the cache — the same test reads the database bytes and rejects
+      `Doe^Jane`; schema v4 has no `patient_name` column; `docs/PRIVACY.md` documents the fields.
+- [x] Cache failures degrade, never block — corrupt file, unwritable cache directory, and
+      save-without-database are covered by tests; the viewer scans uncached in every case.
+- [x] Manual search finds article text — `help_search` (window) and `manual_search` (logic) cover
+      body-only phrases, case-insensitivity, whitespace-only queries, no-results, and clearing.
+- [x] Manual describes the current feature set — measurements and MPR are documented as implemented
+      (MPR as experimental); the stale "not supported" paragraph is gone.
+- [x] Screenshots are real — produced by the app (`--capture`) on a runner with a window server;
+      concept boards are labelled as concepts, never as screenshots.
+- [ ] Windows packaged-app smoke test — **not run**; the exact steps are in VALIDATION.md §
+      "remaining validation steps".
+- [ ] High-DPI / multi-monitor / GPU matrix — **not run**; needs desktop hardware.
+- [ ] Large-study performance — **not run**; the committed corpus is synthetic and small.
