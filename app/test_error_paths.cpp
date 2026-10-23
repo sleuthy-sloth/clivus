@@ -155,26 +155,30 @@ int main(int argc, char** argv)
         }
         CHECK(poisoned > 0);
 
-        // Deterministic DECODE-time failure on every platform: a zeroed body is still parseable
-        // DICOM to some parsers (an MSVC run happily decodes it as black frames), so the RT Dose
-        // object is additionally REPLACED with a same-size file of 0x7f bytes and the SAME mtime.
-        // The fingerprint stays identical, so the cached scan serves the intact-looking row — and
-        // then loadFrame fails outright, which every platform must report and survive.
+        // Deterministic DECODE-time failure on every platform: the cached row points at
+        // rtdose_rle.dcm, which is DELETED and replaced by a different file of the same byte size
+        // with an older mtime. The fingerprint the index keys on (count · newest · total bytes)
+        // therefore still matches — the cached scan serves the intact-looking row — and then
+        // loadFrame hits a missing/unreadable file, which no platform can recover on its own.
         {
-            QFile dose(copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm"));
+            const QString dosePath = copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm");
+            QFile dose(dosePath);
             CHECK(dose.open(QIODevice::ReadOnly));
             const qint64 size = dose.size();
             dose.close();
-            const auto keepMtime = fs::last_write_time(
-                (copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm")).toStdString());
-            CHECK(QFile::remove(copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm")));
-            QFile replacement(copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm"));
-            CHECK(replacement.open(QIODevice::WriteOnly));
-            CHECK(replacement.write(QByteArray(int(size), char(0x7f))) == size);
-            replacement.close();
-            fs::last_write_time(
-                (copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm")).toStdString(),
-                keepMtime);
+            QString filler = copy + QLatin1Char('/') + QStringLiteral("filler.dcm");
+            CHECK(QFile::remove(dosePath));
+            QFile fillerFile(filler);
+            CHECK(fillerFile.open(QIODevice::WriteOnly));
+            CHECK(fillerFile.write(QByteArray(int(size), char(0))) == size);
+            fillerFile.close();
+            // Put the folder's mtime ordering back where it was: filler must not become the
+            // "newest" the fingerprint is derived from, or the cache would miss.
+            namespace fs = std::filesystem;
+            const auto sourceMtime = fs::last_write_time(
+                (QString(argv[1]) + QLatin1Char('/') + QStringLiteral("CT_small.dcm")).toStdString());
+            fs::last_write_time((copy + QLatin1Char('/') + QStringLiteral("filler.dcm")).toStdString(),
+                                sourceMtime);
         }
 
         // Reopen: the cached list must come back intact-looking, then decode failures must be
