@@ -197,14 +197,18 @@ void IndexStore::close()
     m_db = nullptr;
 }
 
-std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir)
+std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir, ScanControl* control)
 {
     IndexStore store;
     if (store.open(dir)) {
         auto cached = store.load();
         if (!cached.empty()) return cached;
     }
-    auto series = scanDirectory(dir);
+    auto series = scanDirectory(dir, control);
+    // A cancelled scan returns an empty list. Saving it would write the folder's fingerprint next to
+    // an empty series table, which every later load() reads as a miss anyway — so skip the write and
+    // leave the index describing whatever it described before.
+    if (control && control->cancel.load(std::memory_order_relaxed)) return series;
     store.save(series);   // no-op when the folder is not writable
     return series;
 }

@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Concurrent)
 # The canvas uses fixed-function GL (glBegin/glTexCoord2f/glOrtho). macOS gets those from the
 # OpenGL framework Qt already pulls in; Windows needs opengl32.lib explicitly.
 find_package(OpenGL REQUIRED)
@@ -10,7 +10,7 @@ qt_add_executable(clivus
     main_window.cpp
     canvas_widget.cpp
 )
-target_link_libraries(clivus PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL)
+target_link_libraries(clivus PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent OpenGL::GL)
 set_target_properties(clivus PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE OFF)
 
 # VTK probe: off by default. It needs VTK 9 with the volume rendering modules and no Qt, so it can run

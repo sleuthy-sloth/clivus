@@ -39,6 +39,11 @@ add_executable(clivus_test_index_store tests/test_index_store.cpp)
 target_link_libraries(clivus_test_index_store PRIVATE clivus_core)
 add_test(NAME index_store COMMAND clivus_test_index_store)
 
+# Needs testdata/corpus: the scan is only interesting when there are objects to walk over.
+add_executable(clivus_test_scan tests/test_scan.cpp)
+target_link_libraries(clivus_test_scan PRIVATE clivus_core)
+add_test(NAME scan COMMAND clivus_test_scan "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+
 # Writes its own two objects (MONOCHROME1 and MONOCHROME2 over the same pixels), so no corpus needed.
 add_executable(clivus_test_photometric tests/test_photometric.cpp)
 target_link_libraries(clivus_test_photometric PRIVATE clivus_core)

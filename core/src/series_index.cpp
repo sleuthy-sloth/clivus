@@ -56,11 +56,13 @@ bool interDataToFloat(const DiMonoPixel* px, size_t maxPixels, std::vector<float
 
 }  // namespace
 
-std::vector<SeriesInfo> scanDirectory(const std::string& dir)
+std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control)
 {
     registerCodecs();
     std::map<std::string, SeriesInfo> bySeries;
     std::map<std::string, std::vector<std::pair<long, std::string>>> sortKeys;
+
+    if (control && control->cancel.load(std::memory_order_relaxed)) return {};
 
     std::error_code ec;
     fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
@@ -68,6 +70,12 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir)
 
     for (; it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (ec) break;
+        if (control) {
+            control->examined.fetch_add(1, std::memory_order_relaxed);
+            // Checked per entry: the walk is the slow part of a big folder, and one header parse is
+            // short enough that stopping between entries is all the responsiveness anyone needs.
+            if (control->cancel.load(std::memory_order_relaxed)) return {};
+        }
         if (!it->is_regular_file(ec)) continue;
         const fs::path p = it->path();
 
