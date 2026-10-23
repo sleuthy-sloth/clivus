@@ -24,6 +24,10 @@ void CanvasWidget::initializeGL()
           reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
           reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
     glGenTextures(1, &m_tex);
+    // A re-created context gets a fresh, empty texture, so whatever the last allocation size was no
+    // longer describes it.
+    m_texWidth = 0;
+    m_texHeight = 0;
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -68,8 +72,18 @@ void CanvasWidget::uploadTexture()
     if (m_tex == 0 || !m_frame.valid()) return;
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frame.width, m_frame.height, 0,
-                 GL_LUMINANCE, GL_UNSIGNED_BYTE, m_bytes.data());
+    if (m_texWidth == m_frame.width && m_texHeight == m_frame.height) {
+        // Same slice, new window: the storage is already the right size, so only the bytes move.
+        // This is the drag path — every mouse move lands here, and reallocating the texture for each
+        // one was pure waste.
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_frame.width, m_frame.height, GL_LUMINANCE,
+                        GL_UNSIGNED_BYTE, m_bytes.data());
+        return;
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frame.width, m_frame.height, 0, GL_LUMINANCE,
+                 GL_UNSIGNED_BYTE, m_bytes.data());
+    m_texWidth = m_frame.width;
+    m_texHeight = m_frame.height;
 }
 
 void CanvasWidget::paintGL()
