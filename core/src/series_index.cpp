@@ -9,6 +9,7 @@
 #include <dcmtk/dcmimgle/dimopx.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -19,6 +20,8 @@ namespace clivus {
 namespace fs = std::filesystem;
 
 namespace {
+
+using Vec3 = std::array<double, 3>;
 
 std::string tagString(DcmItem* ds, const DcmTagKey& key)
 {
@@ -68,6 +71,30 @@ int frameCountOf(DcmItem* ds)
     return n > 1 ? int(n) : 1;
 }
 
+// Read doubles from a DCMTK element into a vector
+bool readDoubles(DcmItem* ds, const DcmTagKey& key, std::vector<double>& out, size_t n)
+{
+    DcmElement* elem = nullptr;
+    ds->findAndGetElement(key, elem);
+    if (!elem) return false;
+    out.assign(n, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        Float64 v = 0.0;
+        if (elem->getFloat64(v, static_cast<unsigned long>(i)).bad()) return false;
+        out[i] = v;
+    }
+    return true;
+}
+
+Vec3 cross(const Vec3& a, const Vec3& b)
+{
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+
+double dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+double norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
+
 // Internal representation -> float, without any modality transform (we apply slope/intercept).
 // offset/count pick one frame out of the buffer: for some pixel types DicomImage hands back the whole
 // stack (a 15-frame 32-bit RT Dose reports 1500 pixels for a 10x10 image), and frames are contiguous.
@@ -110,6 +137,48 @@ std::unique_ptr<DcmFileFormat> loadHeader(const std::string& file)
     return full;
 }
 
+// Read per-slice geometry from a dataset
+SeriesInfo::SliceGeometry readSliceGeometry(DcmDataset* ds)
+{
+    SeriesInfo::SliceGeometry geom;
+    
+    // ImagePositionPatient (3 doubles)
+    std::vector<double> ipp;
+    if (readDoubles(ds, DCM_ImagePositionPatient, ipp, 3)) {
+        geom.originX = ipp[0];
+        geom.originY = ipp[1];
+        geom.originZ = ipp[2];
+    }
+    
+    // ImageOrientationPatient (6 doubles - row then column cosines)
+    std::vector<double> iop;
+    if (readDoubles(ds, DCM_ImageOrientationPatient, iop, 6)) {
+        geom.orientRowX = iop[0];
+        geom.orientRowY = iop[1];
+        geom.orientRowZ = iop[2];
+        geom.orientColX = iop[3];
+        geom.orientColY = iop[4];
+        geom.orientColZ = iop[5];
+    }
+    
+    // SliceLocation (optional)
+    Float64 sl = 0.0;
+    if (ds->findAndGetFloat64(DCM_SliceLocation, sl).good()) {
+        geom.sliceLocation = sl;
+    }
+    
+    // InstanceNumber
+    geom.instanceNumber = instanceNumber(ds);
+    
+    // Check if we have valid geometry (both IPP and IOP present)
+    double iopNorm = std::sqrt(iop.empty() ? 0.0 : 
+        iop[0]*iop[0] + iop[1]*iop[1] + iop[2]*iop[2] + 
+        iop[3]*iop[3] + iop[4]*iop[4] + iop[5]*iop[5]);
+    geom.hasGeometry = !ipp.empty() && iopNorm > 1e-9;
+    
+    return geom;
+}
+
 }  // namespace
 
 std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control)
@@ -122,6 +191,7 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         long instance = 0;
         std::string path;
         int frames = 1;
+        SeriesInfo::SliceGeometry geometry;
     };
     std::map<std::string, std::vector<Entry>> sortKeys;
 
@@ -165,8 +235,12 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
 
         auto& known = bySeries[s.seriesUid];
         if (known.files.empty()) known = s;                       // first file wins the metadata
+        
+        // Read per-slice geometry
+        SeriesInfo::SliceGeometry geom = readSliceGeometry(ds);
+        
         known.files.push_back(p.string());
-        sortKeys[s.seriesUid].push_back(Entry{instanceNumber(ds), p.string(), frameCountOf(ds)});
+        sortKeys[s.seriesUid].push_back(Entry{instanceNumber(ds), p.string(), frameCountOf(ds), geom});
     }
 
     std::vector<SeriesInfo> out;
@@ -177,9 +251,11 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
                          [](const auto& a, const auto& b) { return a.instance < b.instance; });
         s.files.clear();
         s.frameCounts.clear();
+        s.sliceGeometry.clear();
         for (auto& k : keys) {
             s.files.push_back(std::move(k.path));
             s.frameCounts.push_back(k.frames);
+            s.sliceGeometry.push_back(std::move(k.geometry));
         }
         out.push_back(std::move(s));
     }
@@ -466,6 +542,99 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
     out.frameIndex = int(want);
     out.frameCount = int(frames);
     return out.valid();
+}
+
+// SeriesInfo member functions for geometry
+
+bool SeriesInfo::hasGeometry() const
+{
+    for (const auto& geom : sliceGeometry) {
+        if (geom.hasGeometry) return true;
+    }
+    return false;
+}
+
+bool SeriesInfo::hasFullGeometry() const
+{
+    if (sliceGeometry.empty() || sliceGeometry.size() != files.size()) return false;
+    for (const auto& geom : sliceGeometry) {
+        if (!geom.hasGeometry) return false;
+    }
+    return true;
+}
+
+std::array<double, 3> SeriesInfo::normal() const
+{
+    for (const auto& geom : sliceGeometry) {
+        if (geom.hasGeometry) {
+            Vec3 row{geom.orientRowX, geom.orientRowY, geom.orientRowZ};
+            Vec3 col{geom.orientColX, geom.orientColY, geom.orientColZ};
+            Vec3 n = cross(row, col);
+            double nNorm = norm(n);
+            if (nNorm > 1e-9) {
+                return {n[0] / nNorm, n[1] / nNorm, n[2] / nNorm};
+            }
+        }
+    }
+    return {0.0, 0.0, 1.0};  // default to axial when no geometry
+}
+
+std::vector<double> SeriesInfo::alongDistances() const
+{
+    std::vector<double> result;
+    if (!hasGeometry()) return result;
+    
+    auto n = normal();
+    for (const auto& geom : sliceGeometry) {
+        if (geom.hasGeometry) {
+            Vec3 ipp{geom.originX, geom.originY, geom.originZ};
+            result.push_back(dot(ipp, n));
+        }
+    }
+    return result;
+}
+
+// Orientation label from ImageOrientationPatient row/col cosines.
+// Returns "Axial", "Sagittal", "Coronal", or "Oblique" based on which anatomical plane
+// the slice normal is closest to. No R/L/A/P markers are added.
+// Returns empty string when orientation cosines are not valid (all zeros or near-zero).
+std::string orientationLabel(const std::array<double, 6>& iop)
+{
+    Vec3 row{iop[0], iop[1], iop[2]};
+    Vec3 col{iop[3], iop[4], iop[5]};
+    
+    double rowNorm = norm(row);
+    double colNorm = norm(col);
+    if (rowNorm < 1e-9 || colNorm < 1e-9) return "";
+    
+    Vec3 n = cross(row, col);
+    double nNorm = norm(n);
+    if (nNorm < 1e-9) return "";
+    
+    n = {n[0] / nNorm, n[1] / nNorm, n[2] / nNorm};
+    
+    // Check which anatomical axis the normal is closest to
+    // Axial: normal ~ (0, 0, ±1)
+    // Sagittal: normal ~ (±1, 0, 0)
+    // Coronal: normal ~ (0, ±1, 0)
+    double axAxial = std::abs(n[2]);
+    double axSagittal = std::abs(n[0]);
+    double axCoronal = std::abs(n[1]);
+    
+    // Threshold for considering it "aligned" with an axis (cosine of 45° ≈ 0.707)
+    // Use > threshold, not >=, so exactly 45° counts as oblique
+        // Stricter threshold for alignment to a primary anatomical plane (e.g., within ~18 degrees of an axis)
+    const double alignedThreshold = 0.95; 
+    
+    if (axAxial > alignedThreshold) {
+        return "Axial";
+    } else if (axSagittal > alignedThreshold) {
+        return "Sagittal";
+    } else if (axCoronal > alignedThreshold) {
+        return "Coronal";
+    }
+    
+    return "Oblique";
 }
 
 }  // namespace clivus

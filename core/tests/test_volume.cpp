@@ -4,11 +4,13 @@
 // trusts InstanceNumber or filenames puts slice 3 where slice 0 belongs, and the value check fails.
 
 #include "clivus/volume.h"
+#include "clivus/series_index.h"
 
 #include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <array>
 #include <string>
 
 int main(int argc, char** argv)
@@ -36,6 +38,16 @@ int main(int argc, char** argv)
     assert(std::fabs(vol.spacingY - 1.0) < 1e-9);
     assert(std::fabs(vol.spacingZ - 2.5) < 1e-9);
 
+    // Volume geometry fields from first slice
+    assert(vol.hasGeometry == true);
+    // The test volume is axial (row=(1,0,0), col=(0,1,0), normal=(0,0,1))
+    assert(std::fabs(vol.orientRowX - 1.0) < 1e-6);
+    assert(std::fabs(vol.orientRowY - 0.0) < 1e-6);
+    assert(std::fabs(vol.orientRowZ - 0.0) < 1e-6);
+    assert(std::fabs(vol.orientColX - 0.0) < 1e-6);
+    assert(std::fabs(vol.orientColY - 1.0) < 1e-6);
+    assert(std::fabs(vol.orientColZ - 0.0) < 1e-6);
+
     // The whole point: depth k must be the slice at z = k*2.5, whose fill value is k. The filenames and
     // InstanceNumbers run the other way, so this also proves positions beat both.
     for (int z = 0; z < vol.depth; ++z) {
@@ -48,6 +60,28 @@ int main(int argc, char** argv)
     }
     assert(vol.minValue == 0.0f);
     assert(vol.maxValue == 3.0f);
+
+    // Test orientationLabel function with known orientations
+    // Axial: row=(1,0,0), col=(0,1,0) -> normal=(0,0,1)
+    std::array<double, 6> iopAxial = {1, 0, 0, 0, 1, 0};
+    assert(clivus::orientationLabel(iopAxial) == "Axial");
+    
+    // Sagittal: row=(0,1,0), col=(0,0,1) -> normal=(1,0,0)
+    std::array<double, 6> iopSagittal = {0, 1, 0, 0, 0, 1};
+    assert(clivus::orientationLabel(iopSagittal) == "Sagittal");
+    
+    // Coronal: row=(1,0,0), col=(0,0,1) -> normal=(0,1,0)
+    std::array<double, 6> iopCoronal = {1, 0, 0, 0, 0, 1};
+    assert(clivus::orientationLabel(iopCoronal) == "Coronal");
+    
+    // Oblique 45 degrees: row=(1,0,0), col=(0,0.707,0.707) -> normal=(0,-0.707,0.707) (not aligned with any axis)
+    // |normal_z| = 0.707, |normal_y| = 0.707, neither > 0.707 threshold, so oblique
+    std::array<double, 6> iopOblique = {1, 0, 0, 0, 0.70710678, 0.70710678};
+    assert(clivus::orientationLabel(iopOblique) == "Oblique");
+    
+    // Invalid (zero) orientation
+    std::array<double, 6> iopZero = {0, 0, 0, 0, 0, 0};
+    assert(clivus::orientationLabel(iopZero) == "");
 
     std::printf("volume: all checks passed (4 slices, spacing %.1f/%.1f/%.1f mm, geometric order)\n",
                 vol.spacingX, vol.spacingY, vol.spacingZ);

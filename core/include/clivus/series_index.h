@@ -32,6 +32,23 @@ struct SeriesInfo {
     int width = 0;
     int height = 0;
 
+    // Per-slice geometry (same length as files). These are header reads on the same pass as the scan,
+    // no extra file opens.
+    struct SliceGeometry {
+        // ImagePositionPatient (origin in patient coordinates, mm)
+        double originX = 0.0, originY = 0.0, originZ = 0.0;
+        // ImageOrientationPatient row/column direction cosines (unit vectors in patient space)
+        double orientRowX = 0.0, orientRowY = 0.0, orientRowZ = 0.0;
+        double orientColX = 0.0, orientColY = 0.0, orientColZ = 0.0;
+        // SliceLocation when present (mm)
+        double sliceLocation = 0.0;
+        // InstanceNumber
+        long instanceNumber = 0;
+        // True when IPP and IOP were both present and valid for this slice
+        bool hasGeometry = false;
+    };
+    std::vector<SliceGeometry> sliceGeometry;
+
     // Total frames across every file. Falls back to the object count when frameCounts is empty, which
     // is what a SeriesInfo built by hand (or read from an index written before frames were tracked)
     // looks like.
@@ -40,6 +57,17 @@ struct SeriesInfo {
     // Maps a flat frame index onto the file that holds it and the frame within that file. False when
     // flat is out of range, so callers do not have to bounds-check first.
     bool locate(int flat, int& fileIndex, int& frameIndex) const;
+
+    // Series-level geometry helpers
+    // True when at least one slice has valid geometry (IOP + IPP)
+    bool hasGeometry() const;
+    // True when ALL slices have valid geometry (required for geometric ordering)
+    bool hasFullGeometry() const;
+    // Returns the slice normal (unit cross of orientRow x orientCol) from the first slice that has geometry
+    // Returns {0,0,1} when no geometry is available
+    std::array<double, 3> normal() const;
+    // Returns the along-distance (dot(IPP, normal)) for each slice with geometry; empty when no geometry
+    std::vector<double> alongDistances() const;
 };
 
 // Recursively scan dir for DICOM objects that carry pixel data, grouped by SeriesInstanceUID.
@@ -48,8 +76,17 @@ struct SeriesInfo {
 // images here" to anyone.
 std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control = nullptr);
 
+// Convenience: cached scan (used by the UI). Reads the index file when fresh, otherwise scans.
+std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir, ScanControl* control);
+
 // Decode one frame of one object. frameIndex is clamped into range, so a caller holding a stale index
 // gets the last frame rather than an error; out.frameIndex/out.frameCount say what came back.
 bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex = 0);
+
+// Orientation label from ImageOrientationPatient row/col cosines.
+// Returns "Axial", "Sagittal", "Coronal", or "Oblique" based on which anatomical plane
+// the slice normal is closest to. No R/L/A/P markers are added.
+// Returns empty string when orientation cosines are not valid (all zeros or near-zero).
+std::string orientationLabel(const std::array<double, 6>& iop);
 
 }  // namespace clivus

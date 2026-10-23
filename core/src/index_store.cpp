@@ -14,7 +14,7 @@ namespace {
 constexpr const char* kIndexName = ".clivus-index.sqlite";
 // Bumped when the cached columns change: an index written by an older build simply reports a miss and
 // the folder is rescanned, so there is no migration path to keep working.
-constexpr const char* kSchemaVersion = "2";
+constexpr const char* kSchemaVersion = "3";
 
 bool exec(sqlite3* db, const char* sql)
 {
@@ -76,7 +76,11 @@ bool IndexStore::open(const std::string& dataFolder)
         " modality TEXT, patient_name TEXT, study_description TEXT, series_description TEXT,"
         " width INTEGER, height INTEGER);"
         "CREATE TABLE IF NOT EXISTS series_file(series_uid TEXT, ordinal INTEGER, path TEXT,"
-        " frames INTEGER);"
+        " frames INTEGER,"
+        " originX REAL, originY REAL, originZ REAL,"
+        " orientRowX REAL, orientRowY REAL, orientRowZ REAL,"
+        " orientColX REAL, orientColY REAL, orientColZ REAL,"
+        " sliceLocation REAL, instanceNumber INTEGER, hasGeometry INTEGER);"
         "CREATE INDEX IF NOT EXISTS series_file_uid ON series_file(series_uid, ordinal);";
     if (!exec(m_db, schema)) {
         close();
@@ -107,7 +111,11 @@ std::vector<SeriesInfo> IndexStore::load()
 
     const char* sql =
         "SELECT s.series_uid, s.study_uid, s.modality, s.patient_name, s.study_description,"
-        " s.series_description, s.width, s.height, f.path, f.frames"
+        " s.series_description, s.width, s.height, f.path, f.frames,"
+        " f.originX, f.originY, f.originZ,"
+        " f.orientRowX, f.orientRowY, f.orientRowZ,"
+        " f.orientColX, f.orientColY, f.orientColZ,"
+        " f.sliceLocation, f.instanceNumber, f.hasGeometry"
         " FROM series s LEFT JOIN series_file f ON f.series_uid = s.series_uid"
         " ORDER BY s.ordinal, f.ordinal;";
     if (sqlite3_prepare_v2(m_db, sql, -1, &st, nullptr) != SQLITE_OK) return out;
@@ -132,10 +140,23 @@ std::vector<SeriesInfo> IndexStore::load()
         const auto* path = sqlite3_column_text(st, 8);
         if (path) {
             out.back().files.emplace_back(reinterpret_cast<const char*>(path));
-            // A row from before frames were cached reads as NULL here, which totalFrames() treats as
-            // one frame per object — but that cannot happen for a version-2 index.
             const int frames = sqlite3_column_int(st, 9);
             out.back().frameCounts.push_back(frames > 0 ? frames : 1);
+            
+            SeriesInfo::SliceGeometry geom;
+            geom.originX = sqlite3_column_double(st, 10);
+            geom.originY = sqlite3_column_double(st, 11);
+            geom.originZ = sqlite3_column_double(st, 12);
+            geom.orientRowX = sqlite3_column_double(st, 13);
+            geom.orientRowY = sqlite3_column_double(st, 14);
+            geom.orientRowZ = sqlite3_column_double(st, 15);
+            geom.orientColX = sqlite3_column_double(st, 16);
+            geom.orientColY = sqlite3_column_double(st, 17);
+            geom.orientColZ = sqlite3_column_double(st, 18);
+            geom.sliceLocation = sqlite3_column_double(st, 19);
+            geom.instanceNumber = sqlite3_column_int64(st, 20);
+            geom.hasGeometry = sqlite3_column_int(st, 21) != 0;
+            out.back().sliceGeometry.push_back(geom);
         }
     }
     sqlite3_finalize(st);
@@ -154,7 +175,7 @@ void IndexStore::save(const std::vector<SeriesInfo>& series)
         sqlite3_prepare_v2(m_db,
                            "INSERT INTO series VALUES(?,?,?,?,?,?,?,?,?)", -1, &insertSeries,
                            nullptr) == SQLITE_OK &&
-        sqlite3_prepare_v2(m_db, "INSERT INTO series_file VALUES(?,?,?,?)", -1, &insertFile,
+        sqlite3_prepare_v2(m_db, "INSERT INTO series_file VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &insertFile,
                            nullptr) == SQLITE_OK;
     if (prepared) {
         for (size_t i = 0; i < series.size(); ++i) {
@@ -177,6 +198,21 @@ void IndexStore::save(const std::vector<SeriesInfo>& series)
                 bindText(insertFile, 3, s.files[f]);
                 const int frames = f < s.frameCounts.size() ? s.frameCounts[f] : 1;
                 sqlite3_bind_int(insertFile, 4, frames > 0 ? frames : 1);
+                
+                const SeriesInfo::SliceGeometry geom = (f < s.sliceGeometry.size()) ? s.sliceGeometry[f] : SeriesInfo::SliceGeometry{};
+                sqlite3_bind_double(insertFile, 5, geom.originX);
+                sqlite3_bind_double(insertFile, 6, geom.originY);
+                sqlite3_bind_double(insertFile, 7, geom.originZ);
+                sqlite3_bind_double(insertFile, 8, geom.orientRowX);
+                sqlite3_bind_double(insertFile, 9, geom.orientRowY);
+                sqlite3_bind_double(insertFile, 10, geom.orientRowZ);
+                sqlite3_bind_double(insertFile, 11, geom.orientColX);
+                sqlite3_bind_double(insertFile, 12, geom.orientColY);
+                sqlite3_bind_double(insertFile, 13, geom.orientColZ);
+                sqlite3_bind_double(insertFile, 14, geom.sliceLocation);
+                sqlite3_bind_int64(insertFile, 15, geom.instanceNumber);
+                sqlite3_bind_int(insertFile, 16, geom.hasGeometry ? 1 : 0);
+                
                 sqlite3_step(insertFile);
                 sqlite3_reset(insertFile);
             }

@@ -17,6 +17,14 @@ struct Volume {
     std::vector<float> voxels;                               // slice-major: (z*height + y)*width + x
     float minValue = 0.0f, maxValue = 0.0f;
 
+    // Slice origin (first slice IPP in patient coordinates, mm)
+    double originX = 0.0, originY = 0.0, originZ = 0.0;
+    // Slice orientation vectors (from first slice that has geometry)
+    double orientRowX = 1.0, orientRowY = 0.0, orientRowZ = 0.0;  // row direction (patient space)
+    double orientColX = 0.0, orientColY = 1.0, orientColZ = 0.0;  // column direction (patient space)
+    // True when origin and orientation are populated from DICOM geometry
+    bool hasGeometry = false;
+
     bool valid() const
     {
         return width > 0 && height > 0 && depth > 0

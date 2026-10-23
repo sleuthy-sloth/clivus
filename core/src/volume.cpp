@@ -64,6 +64,12 @@ bool loadVolume(const SeriesInfo& series, Volume& out)
     Vec3 normal{0.0, 0.0, 1.0};
     bool haveNormal = false;
     double spacingX = 1.0, spacingY = 1.0, sliceThickness = 0.0;
+    
+    // Store first slice's geometry for Volume
+    Vec3 firstRow{1.0, 0.0, 0.0};
+    Vec3 firstCol{0.0, 1.0, 0.0};
+    Vec3 firstIPP{0.0, 0.0, 0.0};
+    bool haveFirstGeometry = false;
 
     for (const std::string& file : series.files) {
         DcmFileFormat ff;
@@ -84,6 +90,10 @@ bool loadVolume(const SeriesInfo& series, Volume& out)
                 const Vec3 col{iop[3], iop[4], iop[5]};
                 normal = cross(row, col);
                 haveNormal = dot(normal, normal) > 1e-9;
+                if (haveNormal) {
+                    firstRow = row;
+                    firstCol = col;
+                }
             }
             std::vector<double> ps;
             if (readDoubles(ds, DCM_PixelSpacing, ps, 2)) {
@@ -98,6 +108,10 @@ bool loadVolume(const SeriesInfo& series, Volume& out)
         if (haveNormal && readDoubles(ds, DCM_ImagePositionPatient, ipp, 3)) {
             ref.along = dot(Vec3{ipp[0], ipp[1], ipp[2]}, normal);
             ref.hasGeometry = true;
+            if (!haveFirstGeometry) {
+                firstIPP = Vec3{ipp[0], ipp[1], ipp[2]};
+                haveFirstGeometry = true;
+            }
         }
         slices.push_back(std::move(ref));
     }
@@ -149,6 +163,21 @@ bool loadVolume(const SeriesInfo& series, Volume& out)
     } else {
         vol.spacingZ = sliceThickness > 0.0 ? sliceThickness : 1.0;
     }
+    
+    // Propagate geometry to Volume
+    if (haveFirstGeometry) {
+        vol.originX = firstIPP[0];
+        vol.originY = firstIPP[1];
+        vol.originZ = firstIPP[2];
+        vol.orientRowX = firstRow[0];
+        vol.orientRowY = firstRow[1];
+        vol.orientRowZ = firstRow[2];
+        vol.orientColX = firstCol[0];
+        vol.orientColY = firstCol[1];
+        vol.orientColZ = firstCol[2];
+        vol.hasGeometry = true;
+    }
+    
     out = std::move(vol);
     return true;
 }
