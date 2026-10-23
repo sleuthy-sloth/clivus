@@ -11,6 +11,7 @@
 #include "clivus/series_index.h"
 
 class CanvasWidget;
+class HelpWindow;
 class QLabel;
 class QListWidget;
 class QProgressBar;
@@ -54,9 +55,12 @@ private:
     void cancelLoading();
     void startBenchmark();
     void setIdleProgress();
+    void showManual();
+    void showAbout();
 
     QListWidget* m_seriesList = nullptr;
     QSplitter* m_splitter = nullptr;
+    HelpWindow* m_help = nullptr;
     CanvasWidget* m_canvas = nullptr;
     QLabel* m_status = nullptr;
     QProgressBar* m_progress = nullptr;

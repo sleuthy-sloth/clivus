@@ -15,6 +15,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSplitter>
+#include <QMessageBox>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QTimer>
@@ -25,6 +26,7 @@
 #include <cstdio>
 
 #include "canvas_widget.h"
+#include "help_window.h"
 #include "style.h"
 
 namespace {
@@ -47,21 +49,34 @@ QImage thumbnailImage(const QString& file)
     return img.copy().scaled(72, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
 
+// Series browser entry (roadmap 1.3): description prominent on the first line, then the
+// modality · count · dimensions line. Any missing field gets an explicit fallback, never a guess.
+QString seriesTitle(const clivus::SeriesInfo& s)
+{
+    const std::string& description =
+        !s.seriesDescription.empty() ? s.seriesDescription : s.studyDescription;
+    return description.empty() ? QString("(no description)")
+                               : QString::fromStdString(description);
+}
+
+QString seriesDetails(const clivus::SeriesInfo& s)
+{
+    QStringList parts;
+    if (!s.modality.empty()) parts << QString::fromStdString(s.modality);
+    // Frames only when they say something the object count does not: a 15-frame RT Dose is one
+    // object and fifteen slices, and the list should not pretend otherwise.
+    const int frames = s.totalFrames();
+    if (frames > int(s.files.size()))
+        parts << QString("%1 objects · %2 frames").arg(s.files.size()).arg(frames);
+    else
+        parts << QString("%1 images").arg(s.files.size());
+    if (s.width > 0 && s.height > 0) parts << QString("%1 × %2").arg(s.width).arg(s.height);
+    return parts.join(QLatin1String(" · "));
+}
+
 QString seriesLabel(const clivus::SeriesInfo& s)
 {
-    // Frames only when they say something the object count does not: a 15-frame RT Dose is one object
-    // and fifteen slices, and the list should not pretend otherwise.
-    const int frames = s.totalFrames();
-    const QString count = frames > int(s.files.size())
-                              ? QString("%1 objects · %2 frames").arg(s.files.size()).arg(frames)
-                              : QString("%1 objects").arg(s.files.size());
-    return QString("%1 · %2\n%3 · %4×%5")
-        .arg(QString::fromStdString(s.modality))
-        .arg(QString::fromStdString(s.seriesDescription.empty() ? s.studyDescription
-                                                              : s.seriesDescription))
-        .arg(count)
-        .arg(s.width)
-        .arg(s.height);
+    return QString("%1\n%2").arg(seriesTitle(s), seriesDetails(s));
 }
 
 }  // namespace
@@ -73,8 +88,11 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1280, 860);
 
     m_seriesList = new QListWidget(this);
-    m_seriesList->setIconSize(QSize(72, 72));
+    m_seriesList->setIconSize(QSize(clivus::style::kThumbSize, clivus::style::kThumbSize));
     m_seriesList->setUniformItemSizes(false);
+    m_seriesList->setWordWrap(true);                 // long descriptions wrap instead of clipping
+    m_seriesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_canvas = new CanvasWidget(this);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
@@ -172,6 +190,15 @@ MainWindow::MainWindow(QWidget* parent)
         m_splitter->setSizes(on ? QList<int>{320, 900} : QList<int>{0, 1220});
     });
 
+    auto* manual = new QAction("&User manual", this);
+    manual->setToolTip("Open the Clivus user manual");
+    manual->setShortcut(QKeySequence::HelpContents);   // F1
+    connect(manual, &QAction::triggered, this, &MainWindow::showManual);
+
+    auto* about = new QAction("&About Clivus", this);
+    about->setToolTip("Version, licence and research-use notice");
+    connect(about, &QAction::triggered, this, &MainWindow::showAbout);
+
     auto* file = menuBar()->addMenu("&File");
     file->addAction(open);
     file->addSeparator();
@@ -182,6 +209,11 @@ MainWindow::MainWindow(QWidget* parent)
     view->addAction(reset);
     view->addSeparator();
     view->addAction(sidebar);
+
+    auto* help = menuBar()->addMenu("&Help");
+    help->addAction(manual);
+    help->addSeparator();
+    help->addAction(about);
 
     auto* toolbar = addToolBar("main");
     toolbar->setMovable(false);
@@ -271,7 +303,9 @@ void MainWindow::scanFinished()
     m_seriesList->clear();
     for (const auto& s : m_series) {
         auto* item = new QListWidgetItem(seriesLabel(s), m_seriesList);
-        item->setToolTip(QString::fromStdString(s.patientName));
+        // Deliberately not the patient name: ordinary hover tooltips stay free of identifying
+        // metadata (roadmap 1.3 / 3.5). The description and modality line are enough to pick a series.
+        item->setToolTip(seriesLabel(s));
     }
 
     if (m_series.empty()) {
@@ -310,16 +344,28 @@ void MainWindow::fillReadyThumbnails()
 {
     const QFuture<QImage> future = m_thumbWatcher->future();
     const int count = future.resultCount();
-    int ready = 0;
+    int ready = 0, failed = 0;
     for (int i = 0; i < count; ++i) {
         if (!future.isResultReadyAt(i)) continue;
         ++ready;
         QListWidgetItem* item = m_seriesList->item(i);
-        if (!item || !item->icon().isNull()) continue;   // filled already, or the decode failed
+        if (!item) continue;
         const QImage image = future.resultAt(i);
-        if (image.isNull()) continue;                    // nothing decoded: leave the row iconless
+        if (image.isNull()) {
+            if (!item->icon().isNull()) continue;
+            // A thumbnail that cannot be decoded is a state the user should see, not a silent gap:
+            // say so on the row, plainly, without echoing any decoder's raw error text (roadmap 1.3).
+            item->setIcon(QIcon::fromTheme("image-missing"));
+            item->setData(Qt::UserRole, true);
+            ++failed;
+            continue;
+        }
         item->setIcon(QIcon(QPixmap::fromImage(image)));
     }
+    if (failed > 0)
+        statusBar()->showMessage(QString("%1 series could not be previewed — you can still open them")
+                                     .arg(failed),
+                                 8000);
     if (m_progress->maximum() > 0) m_progress->setValue(ready);
 }
 
@@ -520,4 +566,33 @@ void MainWindow::updateInfo(const QString& extra)
     text += frameNote;
     if (!extra.isEmpty()) text += "   " + extra;
     m_status->setText(text);
+}
+
+// Help and About arrive with the help-menu skeleton commit; the actions exist from the start so the
+// menus are complete, and these slots are where they land.
+void MainWindow::showManual()
+{
+    if (!m_help) m_help = new HelpWindow(this);
+    m_help->show();
+    m_help->raise();
+    m_help->activateWindow();
+}
+
+void MainWindow::showAbout()
+{
+    QMessageBox::about(this, "About Clivus",
+        QString("<b>Clivus %1</b><br><br>"
+                "A DICOM viewer.<br><br>"
+                "This program is free software: you can redistribute it and/or modify it under "
+                "the terms of the GNU General Public License as published by the Free Software "
+                "Foundation, either version 3 of the License, or (at your option) any later "
+                "version. This program is distributed in the hope that it will be useful, but "
+                "WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or "
+                "FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more "
+                "details.<br><br>"
+                "Clivus is intended for <b>research and educational use</b>. It is not a "
+                "substitute for a clinically validated diagnostic workstation, and its output "
+                "should not be relied upon for clinical decisions without appropriate "
+                "independent validation.")
+            .arg(QString::fromLatin1(CLIVUS_VERSION)));
 }
