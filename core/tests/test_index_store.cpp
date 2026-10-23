@@ -10,7 +10,9 @@
 #include <fstream>
 #include <string>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <cstdlib>
+#else
 #include <sys/stat.h>
 #endif
 
@@ -43,6 +45,17 @@ clivus::SeriesInfo makeSeries(const std::string& uid, int width, std::vector<std
     return s;
 }
 
+// setenv is POSIX-only; MSVC wants _putenv_s. The test sets CLIVUS_CACHE_DIR to keep its cache out
+// of the real one, so the portable shim belongs here rather than in a core header.
+void setEnv(const char* name, const std::string& value)
+{
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);   // overwrite so a repeated call takes effect
+#endif
+}
+
 bool contains(const std::string& haystack, const char* needle)
 {
     return haystack.find(needle) != std::string::npos;
@@ -62,7 +75,7 @@ int main()
 
     // The cache directory is an application concern; core obeys this variable (the GUI sets it from
     // QStandardPaths::CacheLocation). Tests point it at a temp dir so they never touch the real one.
-    setenv("CLIVUS_CACHE_DIR", cache.string().c_str(), 1);
+    setEnv("CLIVUS_CACHE_DIR", cache.string());
 
     // Two data files, so the fingerprint is not an empty folder.
     for (const char* name : {"a.dcm", "b.dcm"}) std::ofstream(dir / name) << "not really dicom";
@@ -190,7 +203,7 @@ int main()
 #ifndef _WIN32
         ::chmod(roCache.c_str(), 0500);   // r-x: cannot create files
 #endif
-        setenv("CLIVUS_CACHE_DIR", roCache.string().c_str(), 1);
+        setEnv("CLIVUS_CACHE_DIR", roCache.string());
         clivus::IndexStore store;
         const bool opened = store.open(dir.string());
         expect(!opened, "an unwritable cache directory yields an unusable cache, not a crash");
@@ -200,7 +213,7 @@ int main()
 #ifndef _WIN32
         ::chmod(roCache.c_str(), 0700);
 #endif
-        setenv("CLIVUS_CACHE_DIR", cache.string().c_str(), 1);
+        setEnv("CLIVUS_CACHE_DIR", cache.string());
     }
 
     // --- clearing
