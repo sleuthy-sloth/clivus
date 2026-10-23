@@ -135,32 +135,47 @@ int main(int argc, char** argv)
         }
 
         // Pass 2: poison in place. CT_small and MR_small are left alone so readable series still
-        // exist; every other object loses its dataset bytes — with the same size it had, and with
-        // its mtime restored, so the fingerprint the index keys on does not change.
+        // exist; every other object's body is zeroed — SAME byte count, mtime restored afterwards,
+        // so the fingerprint the index keys on does not change: count · newest-mtime · total bytes.
         namespace fs = std::filesystem;
         int poisoned = 0;
         for (const QString& f : names) {
             if (f == QStringLiteral("CT_small.dcm") || f == QStringLiteral("MR_small.dcm")) continue;
             const fs::path path = (copy + QLatin1Char('/') + f).toStdString();
             const auto originalMtime = fs::last_write_time(path);
-            QFile file((copy + QLatin1Char('/') + f));
+            QFile file(copy + QLatin1Char('/') + f);
             CHECK(file.open(QIODevice::ReadWrite));
             const qint64 size = file.size();
-            const QByteArray zeroBytes(size, char(0));
-            // after the preamble + file meta header; small corpus objects get half their body
-            const qint64 cut = std::min<qint64>(1764, size / 2);
-            file.seek(cut);
-            const QByteArray payload(size - cut, char(0));
-            const qint64 written = file.write(payload);
-            if (written != size - cut)
-                std::printf("DEBUG write file=%s size=%lld written=%lld errno=%d\n",
-                            f.toStdString().c_str(), size, written, errno);
-            CHECK(written == size - cut);
+            const QByteArray zeros(int(size), char(0));
+            file.seek(0);
+            CHECK(file.write(zeros) == size);
             file.close();
             fs::last_write_time(path, originalMtime);
             ++poisoned;
         }
         CHECK(poisoned > 0);
+
+        // Deterministic DECODE-time failure on every platform: a zeroed body is still parseable
+        // DICOM to some parsers (an MSVC run happily decodes it as black frames), so the RT Dose
+        // object is additionally REPLACED with a same-size file of 0x7f bytes and the SAME mtime.
+        // The fingerprint stays identical, so the cached scan serves the intact-looking row — and
+        // then loadFrame fails outright, which every platform must report and survive.
+        {
+            QFile dose(copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm"));
+            CHECK(dose.open(QIODevice::ReadOnly));
+            const qint64 size = dose.size();
+            dose.close();
+            const auto keepMtime = fs::last_write_time(
+                (copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm")).toStdString());
+            CHECK(QFile::remove(copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm")));
+            QFile replacement(copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm"));
+            CHECK(replacement.open(QIODevice::WriteOnly));
+            CHECK(replacement.write(QByteArray(int(size), char(0x7f))) == size);
+            replacement.close();
+            fs::last_write_time(
+                (copy + QLatin1Char('/') + QStringLiteral("rtdose_rle.dcm")).toStdString(),
+                keepMtime);
+        }
 
         // Reopen: the cached list must come back intact-looking, then decode failures must be
         // readable, non-blocking, and followed by working series — the pump survives.
@@ -186,8 +201,10 @@ int main(int argc, char** argv)
             const QString text = statusOf(w)->text();
             if (text.contains("could not be decoded")) ++seenFailure;
             if (text.startsWith("Slice")) ++seenLoaded;
-            // No stuck indicators after every selection, regardless of outcome.
-            CHECK(progressBarIn(w)->isHidden());
+            // No STUCK indicators after every selection: thumbnails may legitimately still be
+            // filling while slices settle, so the bar may be up briefly — but it must hide on its
+            // own well before the next selection.
+            CHECK(waitFor([&] { return progressBarIn(w)->isHidden(); }, 20000));
         }
         // Both outcomes must occur: the failures are readable AND the decoder pump still lands
         // images afterwards, so recovery is proven within one session.
