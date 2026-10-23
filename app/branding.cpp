@@ -57,6 +57,26 @@ QPixmap fallbackMark(int px)
 
 }  // namespace
 
+QPixmap brandLockup(const int heightPx)
+{
+    for (const QString& path : candidatePaths(QStringLiteral("clivus-lockup-on-dark.png"))) {
+        QPixmap pix;
+        if (pix.load(path) && !pix.isNull())
+            return pix.scaledToHeight(heightPx, Qt::SmoothTransformation);
+    }
+    return {};
+}
+
+QPixmap appIcon(const int px)
+{
+    for (const QString& path : candidatePaths(QStringLiteral("clivus-icon.png"))) {
+        QPixmap pix;
+        if (pix.load(path) && !pix.isNull())
+            return pix.scaled(px, px, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    return brandMark(px);
+}
+
 QPixmap brandMark(const int px)
 {
     for (const QString& base : {QStringLiteral("clivus-mark.svg"), QStringLiteral("clivus-mark.png")}) {
@@ -90,6 +110,17 @@ QWidget* makeBrandHeader(const int markPx, QWidget* parent)
     auto* layout = new QVBoxLayout(header);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
+
+    // The shipped lockup is the design itself (mark and wordmark drawn together): use it whole
+    // when present, so the welcome and About surfaces show the real logo rather than a rebuild.
+    const QPixmap lockup = brandLockup(markPx);
+    if (!lockup.isNull()) {
+        auto* art = new QLabel(header);
+        art->setAlignment(Qt::AlignCenter);
+        art->setPixmap(lockup);
+        layout->addWidget(art);
+        return header;
+    }
 
     auto* mark = new QLabel(header);
     mark->setAlignment(Qt::AlignCenter);

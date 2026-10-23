@@ -4,8 +4,11 @@
 #endif
 
 #include <QApplication>
+#include <QIcon>
 #include <QCommandLineParser>
 #include <QSurfaceFormat>
+
+#include "branding.h"
 
 #include "clivus/version.h"
 
@@ -35,6 +38,9 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     QApplication::setApplicationName("Clivus");
     QApplication::setApplicationVersion(CLIVUS_VERSION);
+    // Window/taskbar icon from the shipped asset set; branding::appIcon falls back to the mark if
+    // the file is absent (a source build with no assets still starts).
+    QApplication::setWindowIcon(QIcon(clivus::branding::appIcon(256)));
     QApplication::setOrganizationName("sleuthy-sloth");   // matches app/settings_names.h
     clivus::style::apply(app);
 

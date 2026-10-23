@@ -63,6 +63,9 @@ jobs:
           & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-translations --no-system-d3d-compiler dist\clivus.exe
           Get-ChildItem "build\vcpkg_installed\x64-windows\bin\*.dll" | Copy-Item -Destination dist
           Copy-Item -Recurse testdata\corpus dist\corpus
+          # Branding assets travel with the binaries: the welcome/About surfaces and the window
+          # icon load them from assets/ next to clivus.exe (see app/branding.cpp).
+          Copy-Item -Recurse assets dist\assets
           Copy-Item docs\windows.md dist\READ-ME-FIRST.md
           # GPL discipline: the artifact contains GPL-3.0 binaries (Clivus, and Qt taken under GPL),
           # so the licence text and the attribution file have to travel with it, not just the repo.

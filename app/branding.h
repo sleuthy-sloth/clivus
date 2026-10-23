@@ -19,8 +19,14 @@
 //   4. :/assets/…                                    (qrc, if one is ever embedded)
 namespace clivus::branding {
 
-// The mark scaled to `px` on its longest edge, or a null pixmap when no asset is present.
+// The mark scaled to `px` on its longest edge, or the built-in fallback when no asset is present.
 QPixmap brandMark(int px);
+
+// The horizontal lockup (mark + wordmark) scaled to `heightPx`, or a null pixmap when absent.
+QPixmap brandLockup(int heightPx);
+
+// The application icon (window/taskbar) at `px`; falls back to the mark.
+QPixmap appIcon(int px);
 
 // True when a mark asset was found (the UI can then skip the wordmark fallback).
 bool hasBrandMark();

@@ -18,6 +18,11 @@ qt_add_executable(clivus
 )
 target_link_libraries(clivus PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Concurrent OpenGL::GL)
 set_target_properties(clivus PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE OFF)
+# The exe icon Windows shows before the app runs (Explorer, pinned taskbar): an RC resource, which
+# only MSVC can consume. The running window's icon comes from setWindowIcon instead.
+if(WIN32 AND MSVC)
+    target_sources(clivus PRIVATE clivus.rc)
+endif()
 
 # Roadmap 3.1 offscreen roundtrip harness: QApplication + QWidget only (the canvas never paints),
 # so it runs headlessly under ctest on any CI box.

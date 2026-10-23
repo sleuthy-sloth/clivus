@@ -1,0 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// The Windows executable's own icon (Explorer, taskbar pinning, Alt-Tab). Qt's setWindowIcon covers
+// the running window; this resource is what Windows shows before the app has started.
+// Paths are relative to this file.
+IDI_CLIVUS ICON "../assets/clivus.ico"
