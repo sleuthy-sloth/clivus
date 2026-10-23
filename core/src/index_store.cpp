@@ -9,6 +9,9 @@
 #include <filesystem>
 
 #if defined(_WIN32)
+// windows.h defines min/max as macros unless this comes first, which breaks std::max below with
+// "illegal token on right side of '::'" (MSVC only — the Linux build never sees it).
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <pwd.h>
@@ -138,7 +141,7 @@ std::string fingerprintOf(const std::string& dir)
         if (name.rfind(kIndexName, 0) == 0) continue;   // our own (legacy) index is not data
         ++count;
         const auto stamp = fs::last_write_time(it->path(), e);
-        if (!e) newest = std::max(newest, (long long)stamp.time_since_epoch().count());
+        if (!e) newest = (std::max)(newest, (long long)stamp.time_since_epoch().count());
         const auto size = fs::file_size(it->path(), e);
         if (!e) bytes += (long long)size;
     }
