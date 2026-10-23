@@ -7,6 +7,7 @@
 #include <QIcon>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QStandardPaths>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QThread>
@@ -47,6 +48,14 @@ int main(int argc, char** argv)
     // the file is absent (a source build with no assets still starts).
     QApplication::setWindowIcon(QIcon(clivus::branding::appIcon(256)));
     QApplication::setOrganizationName("sleuthy-sloth");   // matches app/settings_names.h
+    // The index cache lives in the application cache directory, never beside the DICOM data (the
+    // old in-folder index carried patient names and travelled with copies of a study). QStandardPaths
+    // knows the right place per platform; the core reads it from here.
+    {
+        const QString cacheBase = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+        if (!cacheBase.isEmpty())
+            qputenv("CLIVUS_CACHE_DIR", (cacheBase + QStringLiteral("/index")).toUtf8());
+    }
     clivus::style::apply(app);
 
     QCommandLineParser parser;

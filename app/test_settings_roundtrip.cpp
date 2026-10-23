@@ -10,6 +10,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDir>
 #include <QByteArray>
 #include <QCloseEvent>
 #include <QRect>
@@ -60,6 +61,12 @@ int main(int argc, char** argv)
     QCoreApplication::setOrganizationName(QStringLiteral("sleuthy-sloth"));
     QCoreApplication::setApplicationName(QStringLiteral("clivus"));
     QApplication app(argc, argv);
+
+    // Tests must never touch the user's real cache: point the index at a throwaway directory.
+    qputenv("CLIVUS_CACHE_DIR",
+            (QDir::tempPath() + QStringLiteral("/clivus-test-cache-%1")
+                                   .arg(QCoreApplication::applicationPid()))
+                .toUtf8());
 
     // Start from a clean slate so the test is self-contained.
     QSettings().clear();

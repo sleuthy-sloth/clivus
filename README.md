@@ -290,6 +290,13 @@ the research-use disclaimer — see the real capture above.*
 - **Always out:** no AGPL code of any kind in this tree; the AGPL content that
   ships inside Horos 4.0.1 stays outside.
 
+## Privacy
+
+Clivus is offline by construction: no network calls, no accounts, no telemetry. The only thing it
+writes besides your settings is a small series index so a folder opens quickly the second time — in
+the OS application cache directory, never in your DICOM folder, and without patient names or
+identifiers. Where it lives, what it stores, and how to clear it: [docs/PRIVACY.md](docs/PRIVACY.md).
+
 ## Licence
 
 GPL-3.0-or-later — see [`LICENSE`](LICENSE). Qt 6 is used under its GPL-3.0

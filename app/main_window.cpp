@@ -387,6 +387,17 @@ MainWindow::MainWindow(QWidget* parent)
     view->addAction(m_mprAction);
     view->addSeparator();
 
+    // Cache is a convenience the user can drop at will (roadmap Phase 1): clearing it only costs a
+    // rescan, never data.
+    auto* clearCache = new QAction("Clear index &cache", this);
+    clearCache->setToolTip("Forget this folder's cached metadata (the next open re-reads the files)");
+    connect(clearCache, &QAction::triggered, this, [this] {
+        if (m_folder.isEmpty()) return;
+        clivus::IndexStore::clearCache(m_folder.toStdString());
+        statusBar()->showMessage("Index cache cleared for this folder; the next open rescans it", 5000);
+    });
+    view->addAction(clearCache);
+
     auto* help = menuBar()->addMenu("&Help");
     help->addAction(manual);
     help->addSeparator();

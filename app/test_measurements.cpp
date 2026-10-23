@@ -14,6 +14,7 @@
 #include "canvas_widget.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -89,6 +90,12 @@ int main(int argc, char** argv)
     QCoreApplication::setOrganizationName(QStringLiteral("sleuthy-sloth"));
     QCoreApplication::setApplicationName(QStringLiteral("clivus-measure-test"));
     QApplication app(argc, argv);
+    // Tests must never touch the user's real cache: point the index at a throwaway directory.
+    qputenv("CLIVUS_CACHE_DIR",
+            (QDir::tempPath() + QStringLiteral("/clivus-test-cache-%1")
+                                   .arg(QCoreApplication::applicationPid()))
+                .toUtf8());
+
     QSettings().clear();
     CHECK(argc > 1);
 

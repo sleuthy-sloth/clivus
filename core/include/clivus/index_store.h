@@ -10,31 +10,52 @@ struct sqlite3;
 
 namespace clivus {
 
-// On-disk series index for one data folder: <folder>/.clivus-index.sqlite.
-//
-// A rescan of a folder costs one DCMTK header parse per file (~0.2 ms each on a real series), which is
-// fine once but wasteful on every start. The index is keyed on a fingerprint of the folder contents, so
-// a changed folder simply misses the cache instead of showing stale series — no invalidation logic.
+// Where the index cache lives and what it is allowed to remember. See "Cache policy" in
+// core/src/index_store.cpp for the full account — the short version: an application cache directory
+// rather than the DICOM folder, no patient names or identifiers, and a folder fingerprint for
+// invalidation.
 class IndexStore {
 public:
+    static constexpr const char* kSchemaVersion = "4";
+
     ~IndexStore();
     IndexStore() = default;
     IndexStore(const IndexStore&) = delete;
     IndexStore& operator=(const IndexStore&) = delete;
 
-    // Opens (creating if needed) the index next to the data. False when the folder is not writable or
-    // the file is not a usable index: callers then just scan.
+    // Opens (creating if needed) the cache for this data folder. Returns false when the cache cannot
+    // be used at all (unwritable location, unrecoverable corruption): callers then simply scan, and
+    // the viewer keeps working uncached.
     bool open(const std::string& dataFolder);
 
-    // Cached series for the folder as it is now; empty when there is no usable cache.
+    // True once open() succeeded and the cache is usable.
+    bool available() const { return m_db != nullptr; }
+
+    // Cached series for the folder as it is now; empty when there is no usable cache. A failed read
+    // is a miss (the folder gets rescanned), never a successful empty study.
     std::vector<SeriesInfo> load();
 
-    // Replaces the cached series and the stored fingerprint.
-    void save(const std::vector<SeriesInfo>& series);
+    // Replaces the cached series and fingerprint inside one transaction. False when anything failed;
+    // a failed save leaves the previous cache contents intact rather than a half-written table.
+    bool save(const std::vector<SeriesInfo>& series);
 
     void close();
 
+    // Removes the cache for this folder (and any legacy in-folder index this build replaced).
+    // Safe to call when no cache exists.
+    static void clearCache(const std::string& dataFolder);
+
+    // The cache file path a folder maps to. Exposed for tests and for the "where is it" answer;
+    // empty when no cache directory can be determined.
+    static std::string cachePathFor(const std::string& dataFolder);
+
+    // The legacy in-folder index this build no longer writes: <folder>/.clivus-index.sqlite.
+    static std::string legacyPathFor(const std::string& dataFolder);
+
 private:
+    bool openDatabase(const std::string& path);
+    bool ensureSchema();
+
     std::string m_path;
     std::string m_fingerprint;
     sqlite3* m_db = nullptr;

@@ -9,6 +9,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDir>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QTimer>
@@ -45,6 +46,12 @@ QLineEdit* findSearchBox(MainWindow& w)
 int main(int argc, char** argv)
 {
     QApplication app(argc, argv);
+    // Tests must never touch the user's real cache: point the index at a throwaway directory.
+    qputenv("CLIVUS_CACHE_DIR",
+            (QDir::tempPath() + QStringLiteral("/clivus-test-cache-%1")
+                                   .arg(QCoreApplication::applicationPid()))
+                .toUtf8());
+
     if (argc < 2) {
         std::printf("usage: clivus_test_series_filter <dicom-folder>\n");
         return 2;
