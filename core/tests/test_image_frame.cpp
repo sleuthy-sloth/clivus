@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Assert-style self-check for the pixel math; no test framework on purpose.
 #include "clivus/image_frame.h"
+#include "clivus/series_index.h"
 
 #include <cmath>
 #include <cstdio>
@@ -91,6 +92,68 @@ int main()
         f.fullWindow(c, w);
         eq(w, 1.0, "empty frame window");
         check(!f.valid(), "empty frame invalid", 0, 0);
+    }
+
+    // 9. a frame knows where it came from; a single-frame object is 0 of 1
+    {
+        const ImageFrame f = makeFrame({1.0f, 2.0f}, 2, 1);
+        eq(f.frameIndex, 0, "default frame index");
+        eq(f.frameCount, 1, "default frame count");
+    }
+
+    // 10. a series is one flat run of frames, not one step per object
+    {
+        SeriesInfo s;
+        s.files = {"a.dcm", "b.dcm", "c.dcm"};
+        s.frameCounts = {1, 15, 2};
+        eq(s.totalFrames(), 18, "totalFrames sums frames across objects");
+        int f = -1, fr = -1;
+        check(s.locate(0, f, fr) && f == 0 && fr == 0, "locate: first frame, first object", f, 0);
+        check(s.locate(1, f, fr) && f == 1 && fr == 0, "locate: first frame of the 15-frame object", f, 1);
+        check(s.locate(15, f, fr) && f == 1 && fr == 14, "locate: last frame of the 15-frame object", f, 1);
+        check(s.locate(16, f, fr) && f == 2 && fr == 0, "locate: first frame after the 15-frame object", f, 2);
+        check(s.locate(17, f, fr) && f == 2 && fr == 1, "locate: the final frame", f, 2);
+        check(!s.locate(18, f, fr), "locate: past the end", 0, 0);
+        check(!s.locate(-1, f, fr), "locate: below zero", 0, 0);
+    }
+
+    // 11. a series with no frame counts still browses: one frame per object, no divide-by-zero
+    {
+        SeriesInfo s;
+        s.files = {"a.dcm", "b.dcm"};
+        eq(s.totalFrames(), 2, "totalFrames without per-file counts");
+        int f = -1, fr = -1;
+        check(s.locate(1, f, fr) && f == 1 && fr == 0, "locate without counts", f, 1);
+        check(!s.locate(2, f, fr), "locate past the end without counts", 0, 0);
+    }
+
+    // 12. an empty series is browsable-by-nobody rather than undefined
+    {
+        const SeriesInfo s;
+        eq(s.totalFrames(), 0, "empty series has no frames");
+        int f = -1, fr = -1;
+        check(!s.locate(0, f, fr), "locate in an empty series", 0, 0);
+    }
+
+    // 13. a colour frame is three bytes per pixel and refuses to be windowed
+    {
+        ImageFrame f = makeColourFrame({255, 0, 0, 0, 255, 0}, 2, 1);
+        check(f.valid(), "colour frame valid", 0, 0);
+        check(f.isColour(), "isColour", 0, 0);
+        eq(f.minValue, 0.0, "colour min");
+        eq(f.maxValue, 255.0, "colour max");
+        std::vector<uint8_t> out(6);
+        f.render(out.data(), 100.0, 2.0);   // a window that would crush a greyscale frame to black
+        check(out[0] == 255 && out[1] == 0 && out[2] == 0 && out[3] == 0 && out[4] == 255 &&
+                  out[5] == 0,
+              "render passes colour samples through untouched", out[0], 255);
+        double c = 0, w = 0;
+        f.fullWindow(c, w);
+        eq(w, 256.0, "colour fullWindow width");
+        ImageFrame bad;
+        bad.width = 2; bad.height = 1; bad.channels = 0;
+        bad.pixels = {1, 2};   // two samples for a frame claiming channels=0
+        check(!bad.valid(), "zero channels is invalid", 0, 0);
     }
 
     if (g_failures == 0) std::printf("image_frame: all checks passed\n");

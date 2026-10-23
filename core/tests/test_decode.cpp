@@ -48,6 +48,15 @@ float maxAbsDiff(const clivus::ImageFrame& a, const clivus::ImageFrame& b)
     return worst;
 }
 
+int frameFailures = 0;
+
+void expect(bool ok, const char* what)
+{
+    if (ok) return;
+    std::printf("FAIL %s\n", what);
+    ++frameFailures;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -116,9 +125,46 @@ int main(int argc, char** argv)
             std::printf("%-30s %-12s %s\n", c.file, status, note.c_str());
     }
 
+    // Multi-frame: frame 0 is not the whole object. The RT Dose carries 15 frames of 10x10 at 32 bits,
+    // which is the case that decides both halves of this check — every frame must be reachable, and a
+    // 32-bit object must still hand back one frame's worth of pixels rather than the whole stack.
+    {
+        const std::string path = dir + "/rtdose_rle.dcm";
+        if (!std::filesystem::exists(path)) {
+            std::printf("\nmulti-frame: SKIPPED (no rtdose_rle.dcm)\n");
+        } else {
+            clivus::ImageFrame first, mid, last, beyond;
+            const bool ok0 = clivus::loadFrame(path, first, 0);
+            const bool ok5 = clivus::loadFrame(path, mid, 5);
+            const bool ok14 = clivus::loadFrame(path, last, 14);
+            const bool okPast = clivus::loadFrame(path, beyond, 99);
+            expect(ok0 && ok5 && ok14, "decode frames 0, 5 and 14 of the RT Dose");
+            expect(first.frameCount == 15, "the decoded frame reports 15 frames in the object");
+            expect(first.frameIndex == 0 && mid.frameIndex == 5 && last.frameIndex == 14,
+                   "each decode reports which frame it is");
+            expect(first.width == 10 && first.height == 10, "the frame is 10x10");
+            expect(first.pixels.size() == 100,
+                   "a 10x10 frame holds 100 pixels, not the whole 1500-value stack");
+            expect(mid.pixels.size() == 100 && last.pixels.size() == 100,
+                   "every frame holds one frame's worth of pixels");
+            expect(first.pixels != mid.pixels, "frame 5 is not frame 0");
+            expect(first.pixels != last.pixels && mid.pixels != last.pixels, "the frames differ from each other");
+            expect(okPast && beyond.frameIndex == 14, "an out-of-range index clamps to the last frame");
+            expect(beyond.pixels == last.pixels, "the clamped decode is the last frame's pixels");
+            // DoseGridScaling (1e-06 Gy here) is the modality transform of an RT Dose, which carries
+            // no rescale tags: the pixels must land in Gy — a dose of a few Gy, not the raw stored
+            // counts (which ran to six figures before this was applied).
+            expect(first.maxValue > 0.0f && first.maxValue < 10.0f,
+                   "RT Dose values are scaled into Gy by DoseGridScaling");
+            std::printf("\nmulti-frame: 15-frame 32-bit RT Dose | frame 0 range [%.0f, %.0f] | "
+                        "frame 14 range [%.0f, %.0f]\n",
+                        first.minValue, first.maxValue, last.minValue, last.maxValue);
+        }
+    }
+
     std::printf("\ndecode matrix: %d ok, %d unsupported by this build, %d failed\n", ok, unsupported, failed);
     if (unsupported)
         std::printf("note: codecs absent from this DCMTK build: %s missing\n",
                     codecs.find("JPEG 2000") == std::string::npos ? "JPEG 2000" : "(none)");
-    return failed == 0 ? 0 : 1;
+    return (failed == 0 && frameFailures == 0) ? 0 : 1;
 }

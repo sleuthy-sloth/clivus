@@ -6,20 +6,51 @@
 namespace clivus {
 
 // A single decoded image in modality units (rescale slope/intercept applied).
+//
+// Transforms, what is applied and what is not (PS3.3 C.11):
+//
+//   MODALITY LUT — applied in the IDENTITY and linear (RescaleSlope/RescaleIntercept) shapes only.
+//   An object whose Modality LUT is a LUT Sequence (non-linear) gets no modality transform at all:
+//   its pixels are stored values, and the range/window numbers say so. DCMTK would have applied the
+//   sequence for us, but deliberately disabled (CIF_IgnoreModalityTransformation) so the loader
+//   stays in charge of the arithmetic and the window numbers match what the values are. Dose
+//   objects carry no rescale tags; their multiplier is DoseGridScaling, applied the same way.
+//
+//   VOI LUT — not read from the file. The default window is the full stored range ("full dynamic",
+//   as Horos calls it) and the user moves it from there; a Window Center/Width in the file is not
+//   honoured, nor is a non-linear VOI LUT Sequence. For MONOCHROME2 and MONOCHROME1 the window maps
+//   linearly as in C.11.2.1.2; colour frames take no window at all.
 struct ImageFrame {
     int width = 0;
     int height = 0;
+    // 1 = grey, 3 = RGB. A colour frame holds R,G,B interleaved per pixel, already in display order
+    // (DCMTK converts the file's YBR/planar variant before we see it). Colour is not windowed: DICOM
+    // applies the VOI transform to greyscale only, so render() ignores the window for these.
+    int channels = 1;
     std::vector<float> pixels;   // modality units, row-major, top-left origin
     float minValue = 0.0f;       // over non-padding pixels
     float maxValue = 0.0f;
+    // Which frame of the source object this is, and how many that object carries. A single-frame
+    // object is 0 of 1; a 15-frame RT Dose says 5 of 15. The scan reports the same count, so the
+    // slice browser can step through frames without opening the object first.
+    int frameIndex = 0;
+    int frameCount = 1;
     // MONOCHROME1: the file says high stored values are displayed dark. The flip happens in
     // render(), so pixels, min/max and the window numbers stay in modality units.
     bool invert = false;
 
-    bool valid() const { return width > 0 && height > 0 && pixels.size() == size_t(width) * size_t(height); }
+    bool isColour() const { return channels == 3; }
+
+    // Bytes render() writes: one per pixel for grey, three for RGB.
+    size_t byteCount() const { return size_t(width) * size_t(height) * size_t(channels); }
+
+    bool valid() const
+    {
+        return width > 0 && height > 0 && channels > 0 && pixels.size() == byteCount();
+    }
 
     // DICOM PS3.3 C.11.2.1.2 linear VOI LUT - the formula OsiriX/Horos uses.
-    // out must hold width*height bytes.
+    // out must hold byteCount() bytes.
     void render(uint8_t* out, double center, double width) const;
 
     // Window covering the whole stored range (Horos "full dynamic").
@@ -31,5 +62,9 @@ struct ImageFrame {
 ImageFrame makeFrame(std::vector<float> stored, int width, int height,
                      float slope = 1.0f, float intercept = 0.0f,
                      bool hasPadding = false, float paddingValue = 0.0f);
+
+// rgb: interleaved R,G,B, row-major, already in 0..255 display units. There is no modality or VOI
+// transform to apply, so nothing is rescaled and nothing is windowed.
+ImageFrame makeColourFrame(std::vector<float> rgb, int width, int height);
 
 }  // namespace clivus

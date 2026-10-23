@@ -42,6 +42,6 @@ private:
 
 // scanDirectory(), but through the on-disk index: a second start on an unchanged folder parses no
 // DICOM headers at all.
-std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir);
+std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir, ScanControl* control = nullptr);
 
 }  // namespace clivus
