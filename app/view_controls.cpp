@@ -3,9 +3,38 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QSlider>
 
 #include <algorithm>
+#include <cmath>
+
+namespace {
+
+// Field width: enough for a five-digit centre with a sign and one decimal, which covers CT/MR and
+// dose grids without the bar jumping around as values change.
+constexpr int kFieldWidth = 96;
+
+QString formatValue(double v)
+{
+    // One decimal, trimmed: -600.0 reads as -600, 40.5 stays 40.5. The field is for humans.
+    QString s = QString::number(v, 'f', 1);
+    if (s.endsWith(QLatin1String(".0"))) s.chop(2);
+    return s;
+}
+
+// Parses what the user typed. Rejects empty text, non-numeric text and non-finite numbers: those
+// would otherwise reach ImageFrame::render() and produce undefined bytes rather than an error.
+bool parseValue(const QString& text, double& out)
+{
+    bool ok = false;
+    const double v = text.trimmed().toDouble(&ok);
+    if (!ok || !std::isfinite(v)) return false;
+    out = v;
+    return true;
+}
+
+}  // namespace
 
 SliceBar::SliceBar(QWidget* parent)
     : QWidget(parent)
@@ -76,4 +105,148 @@ void SliceBar::updateLabel(int index)
 {
     if (m_total <= 1) return;
     m_label->setText(QString("Slice %1 / %2").arg(index + 1).arg(m_total));
+}
+
+WindowLevelBar::WindowLevelBar(QWidget* parent)
+    : QWidget(parent)
+{
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(8, 2, 8, 2);
+    layout->setSpacing(6);
+
+    auto* centerLabel = new QLabel("Window Center", this);
+    auto* widthLabel = new QLabel("Window Width", this);
+    m_center = new QLineEdit(this);
+    m_width = new QLineEdit(this);
+    for (auto* field : {m_center, m_width}) {
+        field->setFixedWidth(kFieldWidth);
+        field->setAlignment(Qt::AlignRight);
+        // No keyboard tracking of partial input: the value is committed on Return or focus-out, so a
+        // half-typed "1" cannot briefly re-window the image to a nonsense range.
+        field->setToolTip("Grayscale only — colour frames are shown without a window/level.");
+    }
+    m_center->setToolTip("Window Centre (WC) in modality units. Grayscale only — colour frames ignore "
+                         "window/level. Enter a number and press Return.");
+    m_width->setToolTip("Window Width (WW) in modality units, minimum 1. Grayscale only — colour "
+                        "frames ignore window/level. Enter a number and press Return.");
+    centerLabel->setBuddy(m_center);
+    widthLabel->setBuddy(m_width);
+
+    m_error = new QLabel(this);
+    m_error->setObjectName("wlError");
+    m_error->setStyleSheet("color: #d98b8b;");   // restrained error tint, no animation
+    m_error->hide();
+    m_note = new QLabel(this);
+    m_note->setObjectName("wlNote");
+    m_note->setStyleSheet("color: #9a9fa6;");
+    m_note->hide();
+
+    layout->addWidget(centerLabel);
+    layout->addWidget(m_center);
+    layout->addWidget(widthLabel);
+    layout->addWidget(m_width);
+    layout->addWidget(m_error);
+    layout->addWidget(m_note);
+    layout->addStretch(1);
+
+    for (auto* field : {m_center, m_width}) {
+        connect(field, &QLineEdit::editingFinished, this, &WindowLevelBar::commit);
+    }
+    connect(m_center, &QLineEdit::textEdited, this, &WindowLevelBar::checkTypedText);
+    connect(m_width, &QLineEdit::textEdited, this, &WindowLevelBar::checkTypedText);
+    setValues(0.0, 1.0);
+}
+
+void WindowLevelBar::setValues(double center, double width)
+{
+    m_updating = true;
+    m_lastCenter = center;
+    m_lastWidth = std::max(1.0, width);
+    m_center->setText(formatValue(m_lastCenter));
+    m_width->setText(formatValue(m_lastWidth));
+    m_updating = false;
+    // A drag that lands on a legal value clears a stale complaint: the state on screen is valid again.
+    clearError();
+}
+
+void WindowLevelBar::setWindowingAvailable(bool available, const QString& reason)
+{
+    m_available = available;
+    m_center->setEnabled(available);
+    m_width->setEnabled(available);
+    if (!available) {
+        m_note->setText(reason.isEmpty() ? QString("Window/level does not apply to this image")
+                                         : reason);
+        m_note->show();
+        m_error->hide();
+    } else {
+        m_note->hide();
+    }
+}
+
+// Early complaint while typing: it does not reject anything yet (the field belongs to the user until
+// Return), it only says the text will not be accepted, so the failure is visible before committing.
+void WindowLevelBar::checkTypedText()
+{
+    if (m_updating || !m_available) return;
+    double ignored = 0.0;
+    const QLineEdit* sender = qobject_cast<QLineEdit*>(this->sender());
+    if (sender && !parseValue(sender->text(), ignored)) {
+        setError("Enter a finite number (leave a value as it was to keep it).");
+    } else {
+        clearError();
+    }
+}
+
+void WindowLevelBar::commit()
+{
+    if (m_updating || !m_available) return;
+
+    double center = m_lastCenter;
+    double width = m_lastWidth;
+    const bool centerOk = parseValue(m_center->text(), center);
+    const bool widthOk = parseValue(m_width->text(), width);
+
+    // Reversible rejection: put the last accepted values back in the fields (so the bar always shows
+    // what is actually being rendered) and leave the reason up until the next valid edit.
+    QString rejection;
+    if (!centerOk || !widthOk)
+        rejection = "Window values must be finite numbers — reverted to the last accepted values.";
+    else if (width < 1.0)
+        rejection = "Window Width must be at least 1 — reverted to the last accepted value.";
+    if (!rejection.isEmpty()) {
+        setValues(m_lastCenter, m_lastWidth);   // clears the message first
+        setError(rejection);
+        return;
+    }
+    if (std::abs(center - m_lastCenter) < 1e-9 && std::abs(width - m_lastWidth) < 1e-9) {
+        clearError();
+        return;   // focus-out with nothing changed: not an edit worth re-rendering for
+    }
+
+    clearError();
+    m_lastCenter = center;
+    m_lastWidth = width;
+    // Normalized text so "0040" and "40" end up looking the same as the drag path's formatting.
+    m_updating = true;
+    m_center->setText(formatValue(center));
+    m_width->setText(formatValue(width));
+    m_updating = false;
+    emit windowLevelEdited(center, width);
+}
+
+void WindowLevelBar::setError(const QString& text)
+{
+    m_error->setText(text);
+    m_error->show();
+    m_center->setProperty("invalid", true);
+    m_width->setProperty("invalid", true);
+}
+
+void WindowLevelBar::clearError()
+{
+    m_error->hide();
+    m_error->clear();
+    m_center->setProperty("invalid", false);
+    m_width->setProperty("invalid", false);
 }

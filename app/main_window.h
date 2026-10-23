@@ -13,6 +13,7 @@
 class CanvasWidget;
 class HelpWindow;
 class SliceBar;
+class WindowLevelBar;
 class QLabel;
 class QListWidget;
 class QProgressBar;
@@ -46,6 +47,7 @@ private:
     void showSeries(int index);
     void showSlice(int delta);
     void goToSlice(int index);   // absolute: the slice slider's direct navigation
+    void setWindowLevel(double center, double width);   // single writer of the rendering state
     void updateInfo(const QString& extra = {});
 
     void startScan();
@@ -68,6 +70,7 @@ private:
     HelpWindow* m_help = nullptr;
     CanvasWidget* m_canvas = nullptr;
     SliceBar* m_sliceBar = nullptr;
+    WindowLevelBar* m_windowBar = nullptr;
     QLabel* m_status = nullptr;
     QProgressBar* m_progress = nullptr;
     QPushButton* m_cancel = nullptr;
@@ -80,6 +83,10 @@ private:
     bool m_currentIsColour = false;   // window/level means nothing for a colour frame
     QString m_timing;
     QString m_windowLevel;
+    // Canonical window/level for the frame on screen. Every control reads these and every change goes
+    // through setWindowLevel(), which is what keeps one source of truth (roadmap 2.2/6.3).
+    double m_center = 0.0;
+    double m_width = 1.0;
 
     // Loading runs off the UI thread. Two pools on purpose: the folder scan and each slice decode go
     // on m_foreground (one thread), so the first slice of a folder never queues behind that folder's

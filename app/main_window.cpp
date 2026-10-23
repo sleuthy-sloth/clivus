@@ -98,6 +98,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_canvas = new CanvasWidget(this);
     m_sliceBar = new SliceBar(this);
+    m_windowBar = new WindowLevelBar(this);
 
     // Canvas plus the slice strip under it: one viewer page inside the splitter, so the sidebar
     // splitter still divides browser and image as before.
@@ -105,6 +106,9 @@ MainWindow::MainWindow(QWidget* parent)
     auto* viewerLayout = new QVBoxLayout(viewer);
     viewerLayout->setContentsMargins(0, 0, 0, 0);
     viewerLayout->setSpacing(0);
+    // Options bar above the image, slice strip below it: the two controls the user reaches for most
+    // often sit next to the picture rather than in a dialog (roadmap 2.2/2.5).
+    viewerLayout->addWidget(m_windowBar, 0);
     viewerLayout->addWidget(m_canvas, 1);
     viewerLayout->addWidget(m_sliceBar, 0);
 
@@ -289,11 +293,17 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
     connect(m_sliceBar, &SliceBar::sliceRequested, this, &MainWindow::goToSlice);
+    // The canvas is the one that changes values by dragging; it reports them here, this is where they
+    // become the canonical state, and the fields are refreshed from it (roadmap 2.2/6.3).
     connect(m_canvas, &CanvasWidget::windowChanged, this, [this](double c, double w) {
         if (m_currentSeries < 0) return;
+        m_center = c;
+        m_width = w;
         m_windowLevel = QString("WC %1  WW %2").arg(c, 0, 'f', 1).arg(w, 0, 'f', 1);
+        m_windowBar->setValues(c, w);
         updateInfo();
     });
+    connect(m_windowBar, &WindowLevelBar::windowLevelEdited, this, &MainWindow::setWindowLevel);
     connect(m_canvas, &CanvasWidget::viewChanged, this, [this] { updateInfo(); });
     connect(m_canvas, &CanvasWidget::frameTiming, this,
             [this](double windowMs, double paintMs, double fps) {
@@ -322,6 +332,7 @@ void MainWindow::openFolder(const QString& dir)
     m_timing.clear();
     m_windowLevel.clear();
     m_canvas->setFrame(clivus::ImageFrame{});   // black, rather than the old folder's image
+    m_windowBar->setWindowingAvailable(true);
     m_sliceBar->setSliceCount(0);
     m_centralStack->setCurrentIndex(1);         // off the empty state: the folder is being opened
     m_status->setText("Loading series…");
@@ -498,6 +509,12 @@ void MainWindow::sliceFinished()
     }
     m_currentSlice = r.index;
     m_currentIsColour = r.frame.isColour();
+    // Colour frames ignore the window (render() passes their samples through), so the fields stay
+    // visible but disabled, with the reason in the options bar as well as the overlay (roadmap 2.2).
+    m_windowBar->setWindowingAvailable(
+        !m_currentIsColour,
+        m_currentIsColour ? QString("Window/level does not apply to colour images")
+                          : QString());
     // The strip lands on the slice that actually arrived; if the wheel had moved on, the check above
     // already returned and the next decode will settle it.
     m_sliceBar->setCurrentSlice(r.index);
@@ -648,6 +665,15 @@ void MainWindow::goToSlice(int index)
     if (!m_sliceInFlight) updateInfo();
 }
 
+// Single writer for the rendering state (roadmap 6.3). The canvas echoes the values back through
+// windowChanged, so the fields, the overlay and the status line all end up showing exactly what
+// ImageFrame::render() is being handed - none of them keeps its own copy to drift.
+void MainWindow::setWindowLevel(double center, double width)
+{
+    if (m_currentSeries < 0) return;
+    m_canvas->setWindowLevel(center, width);
+}
+
 void MainWindow::updateInfo(const QString& extra)
 {
     if (m_currentSeries < 0) return;
@@ -694,6 +720,9 @@ void MainWindow::updateInfo(const QString& extra)
                          .arg(total)
                          .arg(description.isEmpty() ? QString("(no description)") : description);
     if (!extra.isEmpty()) status += " — " + extra;
+    // Roadmap 2.2: colour frames are not a failure, but the missing window/level must be stated, not
+    // left for the user to discover by dragging with no effect.
+    if (m_currentIsColour) status += " — colour image: window/level is not applied";
     m_status->setText(status);
 }
 
