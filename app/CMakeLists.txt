@@ -56,3 +56,6 @@ if(CLIVUS_BUILD_VTK_PROBE)
     target_link_libraries(vtk_probe PRIVATE clivus_core ${VTK_LIBRARIES})
     vtk_module_autoinit(TARGETS vtk_probe MODULES ${VTK_LIBRARIES})
 endif()
+
+# The source carries non-ASCII literals (middle dots, dashes, degree signs) as UTF-8 bytes; without /utf-8 MSVC reads them as cp1252 and ships mojibake on Windows.
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

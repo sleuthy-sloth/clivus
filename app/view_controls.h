@@ -17,6 +17,8 @@ class SliceBar : public QWidget {
     Q_OBJECT
 public:
     explicit SliceBar(QWidget* parent = nullptr);
+    bool eventFilter(QObject* watched, QEvent* event) override;   // click-to-jump + scrub on slider
+
 
     // A series of one frame is not navigable: the slider is disabled and the label says so, rather
     // than offering a control that cannot move.

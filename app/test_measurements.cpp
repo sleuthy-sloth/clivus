@@ -162,6 +162,11 @@ int main(int argc, char** argv)
         return canvas->distanceCount() == 0;
     }, 15000));
 
+    // Smooth scroll: with the display settled, the prefetch slot chases the neighbour in the
+    // wheel's direction (default forward), so the next step can present without a decode wait.
+    w.setActiveTool(MainWindow::ActiveTool::WindowLevel);
+    CHECK(waitFor([&] { return w.prefetchIndex() == 1; }, 15000));
+
     canvas->clearMeasurements();
     QSettings().clear();
     std::printf("measurements: all checks passed\n");

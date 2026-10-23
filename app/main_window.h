@@ -39,9 +39,13 @@ public:
     // The tools (and their enum) are public API: layouts and tests address the active tool.
     enum class ActiveTool { WindowLevel, Pan, Pointer, Measure };
     void setActiveTool(ActiveTool tool);
+    int prefetchIndex() const { return m_prefetchIndex; }   // test probe: the smooth-scroll slot
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;   // drop a folder or DICOM file anywhere
+    void dropEvent(QDropEvent* event) override;
+
     bool eventFilter(QObject* watched, QEvent* event) override;   // roadmap 3.4: Escape in the search box
 
 private:
@@ -72,6 +76,8 @@ private:
     void fillReadyThumbnails();
     void pumpSlice();
     void sliceFinished();
+    void presentSlice(int index, clivus::ImageFrame frame);
+    void onPrefetchLanded();
     void cancelLoading();
     void startBenchmark();
     void setIdleProgress();
@@ -131,6 +137,11 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     quint64 m_epoch = 0;       // bumped when the on-screen series changes; stale decodes are dropped
     int m_desiredSlice = -1;   // where the wheel wants to be; decodes catch up to it one at a time
     int m_failedSlice = -1;    // last slice a decode failed on: pumpSlice() refuses to auto-retry it
+    bool m_lastStep = true;    // the wheel's travel direction (true = forward); drives the prefetch
+    bool m_hasStep = false;    // before the first step, the lookahead stays quiet
+    QFutureWatcher<clivus::ImageFrame>* m_prefetchWatcher = nullptr;
+    clivus::ImageFrame m_prefetchFrame;   // the parked, still-unpresented neighbour frame
+    int m_prefetchIndex = -1;             // which slice the parked frame (or the in-flight one) is
     bool m_sliceInFlight = false;
     int m_benchFrames = 0;     // pending --bench request, honoured once the first slice is on screen
     int m_benchRow = 0;

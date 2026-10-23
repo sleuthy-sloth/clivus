@@ -19,3 +19,6 @@ add_subdirectory(core)
 if(CLIVUS_BUILD_APP)
     add_subdirectory(app)
 endif()
+
+# The source carries non-ASCII literals (middle dots, dashes, degree signs) as UTF-8 bytes; without /utf-8 MSVC reads them as cp1252 and ships mojibake on Windows.
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

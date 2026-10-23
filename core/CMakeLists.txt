@@ -73,3 +73,6 @@ foreach(test_target clivus_test_image_frame clivus_test_decode clivus_test_volum
         target_compile_options(${test_target} PRIVATE -UNDEBUG)
     endif()
 endforeach()
+
+# The source carries non-ASCII literals (middle dots, dashes, degree signs) as UTF-8 bytes; without /utf-8 MSVC reads them as cp1252 and ships mojibake on Windows.
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

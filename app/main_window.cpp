@@ -21,7 +21,10 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScreen>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QSettings>
+#include <QUrl>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -214,6 +217,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_sliceWatcher = new QFutureWatcher<SliceResult>(this);
     connect(m_sliceWatcher, &QFutureWatcherBase::finished, this, &MainWindow::sliceFinished);
 
+    // The prefetch slot's own watcher: smooth scroll (see presentSlice). Never presents anything
+    // itself without the user's target agreeing (onPrefetchLanded checks); shares the foreground
+    // pool, so the app stays one decode at a time.
+    m_prefetchWatcher = new QFutureWatcher<clivus::ImageFrame>(this);
+    connect(m_prefetchWatcher, &QFutureWatcherBase::finished, this,
+            &MainWindow::onPrefetchLanded);
+
     auto* open = new QAction("&Open folder…", this);
     open->setIcon(QIcon::fromTheme("folder-open"));
     open->setToolTip("Choose a folder of DICOM files to scan");
@@ -259,11 +269,12 @@ MainWindow::MainWindow(QWidget* parent)
                             "left-drag still adjusts window/level.");
     m_panAction->setCheckable(true);
 
-    m_pointerAction = new QAction("&Pointer", this);
+    m_pointerAction = new QAction("&Browse", this);
     auto* pointer = m_pointerAction;
     pointer->setIcon(QIcon::fromTheme("cursor-arrow"));
-    pointer->setToolTip("Pointer tool (arrow cursor), for looking without an active adjustment. Both "
-                        "drags keep working.");
+    pointer->setToolTip("Browse tool (B) — the plain arrow: no adjustment is highlighted, but both "
+                        "drags keep working (left = window/level, right = pan) as does the wheel "
+                        "and double-click reset");
     pointer->setCheckable(true);
 
     // The measurement tool (M): its stated purpose takes over the LEFT drag while it is the
@@ -408,6 +419,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_centralStack->addWidget(m_emptyState);   // page 0: nothing open yet
     m_centralStack->addWidget(m_splitter);     // page 1: folder open
     setCentralWidget(m_centralStack);
+    setAcceptDrops(true);   // dropping a folder or a DICOM file opens it (File > Open equivalence)
 
     restoreLayout();   // roadmap 3.1: geometry, splitter, sidebar and diagnostics from QSettings
 
@@ -549,6 +561,31 @@ void MainWindow::resetLayout()
 // mirrors it into the cursor and the one-line hint so the three cannot drift (roadmap 2.1/2.6).
 // Switching tools changes feedback only; it never disables a gesture, so the user cannot get stuck in a
 // mode that does not do what they expect.
+// A folder dropped anywhere on the window opens it; a single DICOM file opens its folder (the scan
+// reads every object in the folder; one file alone is not a study).
+void MainWindow::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasUrls()) event->acceptProposedAction();
+}
+
+void MainWindow::dropEvent(QDropEvent* event)
+{
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (urls.isEmpty()) return;
+    event->acceptProposedAction();
+    QString target;
+    for (const QUrl& url : urls) {
+        const QString local = url.toLocalFile();
+        if (QFileInfo(local).isDir()) {
+            target = local;
+            break;   // a dropped folder is what the user pointed at
+        }
+        if (QFileInfo(local).isFile() && target.isEmpty())
+            target = QFileInfo(local).absolutePath();   // remember the first file's folder
+    }
+    if (!target.isEmpty()) openFolder(target);
+}
+
 void MainWindow::setActiveTool(ActiveTool tool)
 {
     m_activeTool = tool;
@@ -728,6 +765,14 @@ void MainWindow::fillReadyThumbnails()
 // across the whole series, so one 15-frame object is 15 steps rather than one.
 void MainWindow::pumpSlice()
 {
+    // A transient fresh decode of the same slice skips straight to the decode; but a parked
+    // prefetch for exactly this index presents instantly (that is the smooth-scroll payoff).
+    if (!m_sliceInFlight && m_currentSeries >= 0 && m_prefetchFrame.valid() &&
+        m_prefetchIndex == m_desiredSlice && m_failedSlice != m_desiredSlice) {
+        m_prefetchIndex = -1;
+        presentSlice(m_desiredSlice, std::move(m_prefetchFrame));
+        return;
+    }
     if (m_sliceInFlight || m_currentSeries < 0 || m_desiredSlice < 0) return;
     // Roadmap 3.5: a slice that already failed is not retried on its own — that would spin the
     // decode pool (pump → fail → pump) on a permanently broken file. The failure is cleared only
@@ -779,14 +824,18 @@ void MainWindow::sliceFinished()
         if (m_desiredSlice != r.index) pumpSlice();
         return;
     }
-    // A fast spin leaves the wheel ahead of what is being decoded; painting this one would flash a
-    // slice the user has already scrolled past, so let the pump fetch the one they are on.
-    if (r.index != m_desiredSlice) {
-        pumpSlice();
-        return;
-    }
-    m_currentSlice = r.index;
-    m_currentIsColour = r.frame.isColour();
+    presentSlice(r.index, std::move(r.frame));
+}
+
+// The one canonical presentation path (sliceFinished's ok-tail, shared by the prefetch slot's
+// consume in pumpSlice). Whatever gets here has passed the series-epoch/stale checks where they
+// belong (sliceFinished guards the pipeline; pumpSlice guards cached consumption against a changed
+// target — because a consume that lost the race lands on stale lines).
+void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
+{
+    if (m_currentSeries < 0) return;
+    m_currentSlice = index;
+    m_currentIsColour = frame.isColour();
     // Colour frames ignore the window (render() passes their samples through), so the fields stay
     // visible but disabled, with the reason in the options bar as well as the overlay (roadmap 2.2).
     m_windowBar->setWindowingAvailable(
@@ -796,13 +845,52 @@ void MainWindow::sliceFinished()
     m_presetBar->setAvailable(
         !m_currentIsColour,
         m_currentIsColour ? QString("Presets need a grayscale image") : QString());
-    // The strip lands on the slice that actually arrived; if the wheel had moved on, the check above
-    // already returned and the next decode will settle it.
-    m_sliceBar->setCurrentSlice(r.index);
-    m_canvas->setFrame(std::move(r.frame));
+    m_sliceBar->setCurrentSlice(index);
+    m_canvas->setFrame(std::move(frame));
     updateInfo();
-    pumpSlice();     // the wheel may have moved while this decode was running
+
+    // Smooth scroll (radiology report: the wheel stutters and skips): with the display settled,
+    // quietly decode the neighbour in the wheel's travel direction into a separate prefetch slot.
+    // The next step presents it instantly (pumpSlice consumes the slot) instead of sitting through
+    // a decode. One decode at a time is untouched: both the main pump and the prefetch share the
+    // single foreground pool; a landing behind a series change is dropped by the epoch check.
+    const int total = m_series[size_t(m_currentSeries)].totalFrames();
+    const int ahead = m_currentSlice + (m_lastStep ? 1 : -1);
+    if (ahead >= 0 && ahead < total && m_prefetchIndex != ahead) {
+        const auto& series = m_series[size_t(m_currentSeries)];
+        int fileIndex = 0, frameIndex = 0;
+        if (series.locate(ahead, fileIndex, frameIndex)) {
+            m_prefetchIndex = ahead;
+            const std::string path = series.files[size_t(fileIndex)];
+            const quint64 epoch = m_epoch;
+            m_prefetchWatcher->setFuture(QtConcurrent::run(&m_foreground, [path, epoch, frameIndex] {
+                clivus::ImageFrame frame;
+                frame.frameIndex = 0;
+                const bool ok = clivus::loadFrame(path, frame, frameIndex);
+                return ok ? frame : clivus::ImageFrame{};
+            }));
+        }
+    }
     startBenchmark();
+}
+
+// The prefetch landing: cache only what still belongs to the open series (epoch), and present it
+// straight away if the wheel is already pointing at it — that is the case where the user scrolled
+// while the prefetch was in flight and the slot's frame is exactly what they asked for.
+void MainWindow::onPrefetchLanded()
+{
+    const clivus::ImageFrame frame = m_prefetchWatcher->result();
+    if (frame.valid() && m_currentSeries >= 0 && m_prefetchIndex >= 0 &&
+        m_prefetchIndex == m_desiredSlice && !m_sliceInFlight) {
+        m_prefetchIndex = -1;
+        presentSlice(m_desiredSlice, std::move(frame));
+        return;
+    }
+    if (frame.valid()) {
+        m_prefetchFrame = std::move(frame);   // parked: the pump serves it when the wheel arrives
+        return;
+    }
+    m_prefetchIndex = -1;   // a failed or stale prefetch: nothing parked
 }
 
 void MainWindow::cancelLoading()
@@ -965,6 +1053,9 @@ void MainWindow::showSeries(int index)
 
     ++m_epoch;              // a decode still running belongs to the series we are leaving
     m_failedSlice = -1;     // new series, fresh failure tracking (roadmap 3.5)
+    m_prefetchFrame = clivus::ImageFrame{};   // the parked prefetch belongs to the previous series
+    m_prefetchIndex = -1;
+    m_hasStep = false;      // nothing about the wheel is remembered across a series switch
     m_currentSeries = index;
     m_currentSlice = -1;    // nothing decoded for this series yet
     m_timing.clear();
@@ -989,6 +1080,8 @@ void MainWindow::showSlice(int delta)
     const int from = std::max(m_sliceInFlight ? m_desiredSlice : m_currentSlice, 0);
     const int next = std::clamp(from + delta, 0, total - 1);
     if (next == m_desiredSlice && (m_sliceInFlight || next == m_currentSlice)) return;
+    m_lastStep = next > (m_sliceInFlight ? m_desiredSlice : m_currentSlice);
+    m_hasStep = true;
     m_desiredSlice = next;
     // The slider follows the slice the wheel is aiming at, not the one still decoding: during a fast
     // spin the strip and the decode pump both chase the same target, and the pump decides when the

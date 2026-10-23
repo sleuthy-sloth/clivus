@@ -6,6 +6,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QSlider>
+#include <QMouseEvent>
+#include <QStyle>
 
 #include <algorithm>
 #include <cmath>
@@ -62,8 +64,32 @@ SliceBar::SliceBar(QWidget* parent)
         updateLabel(value);
         emit sliceRequested(value);
     });
+    // A click anywhere on the strip jumps straight to that slice, and holding the button scrubs:
+    // a bare QSlider paginates toward the click instead, which nobody expects on a slice strip.
+    m_slider->installEventFilter(this);
 
     setSliceCount(0);
+}
+
+bool SliceBar::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_slider && m_total > 1) {
+        QMouseEvent* me = static_cast<QMouseEvent*>(event);
+        const bool press = event->type() == QEvent::MouseButtonPress &&
+                           me->button() == Qt::LeftButton;
+        const bool dragMove = event->type() == QEvent::MouseMove &&
+                              me->buttons() & Qt::LeftButton;
+        if (press || dragMove) {
+            const int value = QStyle::sliderValueFromPosition(
+                m_slider->minimum(), m_slider->maximum(),
+                std::clamp(me->position().toPoint().x() - m_slider->rect().x(), 0,
+                           m_slider->width()),
+                m_slider->width(), false);
+            if (m_slider->value() != value) m_slider->setValue(value);
+            return true;   // the jump is handled; no pagination underneath
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void SliceBar::setSliceCount(int total)
