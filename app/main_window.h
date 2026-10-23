@@ -39,8 +39,17 @@ public:
     void runBenchmark(int frames, int seriesRow = 0);
 
     // The tools (and their enum) are public API: layouts and tests address the active tool.
-    enum class ActiveTool { WindowLevel, Pan, Pointer, Measure };
+    enum class ActiveTool { WindowLevel, Pan, Pointer, Measure, RoiRect, RoiEllipse };
     void setActiveTool(ActiveTool tool);
+
+    // Annotations (roadmap D2): ROIs belong to one slice of one series. The window converts between
+    // the canvas's in-memory list and the per-series sidecar, so the canvas never touches files.
+    QString currentSeriesUid() const;
+    // Test/introspection only: the Series Instance UID the annotation sidecar is keyed by.
+    std::string seriesUidForTest() const { return currentSeriesUid().toStdString(); }
+    void loadAnnotationsForSlice(int slice);
+    void saveAnnotationsForSlice(int slice);
+    void exportMeasurements();
     int prefetchIndex() const { return m_prefetchIndex; }   // test probe: the smooth-scroll slot
     bool mprAvailable() const { return m_mprAction && m_mprAction->isEnabled(); }
     // Documentation capture support: true once a slice is decoded and on the canvas, and a way to
@@ -127,6 +136,8 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     QAction* m_panAction = nullptr;
     QAction* m_pointerAction = nullptr;
     QAction* m_measureAction = nullptr;
+    QAction* m_roiRectAction = nullptr;
+    QAction* m_roiEllipseAction = nullptr;
     QAction* m_mprAction = nullptr;
     QAction* m_diagnosticsAction = nullptr;   // kept for layout save/restore (roadmap 3.1)
     bool m_showDiagnostics = false;   // persisted (roadmap 3.1): the toggle survives a restart

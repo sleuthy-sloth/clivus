@@ -2,6 +2,7 @@
 #include "main_window.h"
 
 #include "about_dialog.h"
+#include "annotation_store.h"
 #include "server_dialog.h"
 #include "series_summary.h"
 #include "branding.h"
@@ -12,6 +13,7 @@
 #include <QActionGroup>
 #include <QDir>
 #include <QFileDialog>
+#include <QTextStream>
 #include <QIcon>
 #include <QImage>
 #include <QHBoxLayout>
@@ -207,6 +209,11 @@ MainWindow::MainWindow(QWidget* parent)
         const QString dir = QFileDialog::getExistingDirectory(this, "DICOM folder");
         if (!dir.isEmpty()) openFolder(dir);
     });
+    // ROI edits are written through immediately: a measurement the user can see must survive a
+    // crash, and the file is small. The canvas announces the change; the window knows the series.
+    connect(m_canvas, &CanvasWidget::roisChanged, this,
+            [this] { saveAnnotationsForSlice(m_currentSlice); });
+
     // Network access (roadmap D1): a DICOMweb study comes down into the cache and then opens
     // through the ordinary scan path — one decode route, not two.
     auto* openFromServer = new QAction("Open from &server…", this);
@@ -273,9 +280,21 @@ MainWindow::MainWindow(QWidget* parent)
     measure->setCheckable(true);
     measure->setShortcut(QKeySequence("M"));   // single key like Fit's F; the noting fields never see it
 
+    // ROI tools (roadmap D2). Same one-tool-at-a-time model as Measure: while active, the LEFT drag
+    // defines the region; right-drag still pans. Statistics appear on release.
+    m_roiRectAction = new QAction("&Rectangle ROI", this);
+    m_roiRectAction->setToolTip("Rectangle ROI — left-drag a region to read mean, SD, min, max and "
+                                "area; saved with the series");
+    m_roiRectAction->setCheckable(true);
+    m_roiRectAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+    m_roiEllipseAction = new QAction("&Ellipse ROI", this);
+    m_roiEllipseAction->setToolTip("Ellipse ROI — left-drag an ellipse to read mean, SD, min, max "
+                                   "and area; saved with the series");
+    m_roiEllipseAction->setCheckable(true);
+
     m_toolGroup = new QActionGroup(this);
     m_toolGroup->setExclusive(true);
-    for (auto* a : {m_windowAction, m_panAction, pointer, measure}) {
+    for (auto* a : {m_windowAction, m_panAction, pointer, measure, m_roiRectAction, m_roiEllipseAction}) {
         a->setActionGroup(m_toolGroup);
         m_toolGroup->addAction(a);
     }
@@ -284,6 +303,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_panAction, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pan); });
     connect(pointer, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pointer); });
     connect(measure, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Measure); });
+    connect(m_roiRectAction, &QAction::triggered, this,
+            [this] { setActiveTool(ActiveTool::RoiRect); });
+    connect(m_roiEllipseAction, &QAction::triggered, this,
+            [this] { setActiveTool(ActiveTool::RoiEllipse); });
 
     auto* sidebar = new QAction("&Series sidebar", this);
     sidebar->setToolTip("Show or hide the series browser (Ctrl+B)");
@@ -320,6 +343,10 @@ MainWindow::MainWindow(QWidget* parent)
     auto* file = menuBar()->addMenu("&File");
     file->addAction(open);
     file->addAction(openFromServer);
+    auto* exportAction = new QAction("&Export measurements…", this);
+    exportAction->setToolTip("Write the open series' saved ROIs to a CSV file");
+    connect(exportAction, &QAction::triggered, this, &MainWindow::exportMeasurements);
+    file->addAction(exportAction);
     file->addSeparator();
     file->addAction(quit);
 
@@ -611,6 +638,101 @@ void MainWindow::openMprView()
     view->activateWindow();
 }
 
+QString MainWindow::currentSeriesUid() const
+{
+    if (m_currentSeries < 0 || m_currentSeries >= int(m_series.size())) return {};
+    return QString::fromStdString(m_series[size_t(m_currentSeries)].seriesUid);
+}
+
+void MainWindow::loadAnnotationsForSlice(const int slice)
+{
+    m_canvas->setRois({});
+    if (slice < 0) return;
+    const QString uid = currentSeriesUid();
+    if (uid.isEmpty()) return;   // no Series Instance UID: nothing can be keyed, so nothing loads
+    QString warning;
+    const auto stored = AnnotationStore::load(uid, &warning);
+    if (!warning.isEmpty()) statusBar()->showMessage(warning, 8000);
+    for (const auto& entry : stored) {
+        if (entry.slice != slice) continue;
+        std::vector<CanvasWidget::RoiAnnotation> rois;
+        rois.reserve(size_t(entry.rois.size()));
+        for (const auto& roi : entry.rois) rois.push_back(roi);
+        m_canvas->setRois(std::move(rois));
+        m_canvas->refreshRoiStats();   // numbers come from the pixels, never from the file
+        break;
+    }
+}
+
+void MainWindow::saveAnnotationsForSlice(const int slice)
+{
+    if (slice < 0) return;
+    const QString uid = currentSeriesUid();
+    if (uid.isEmpty()) return;
+    const auto& rois = m_canvas->rois();
+    QVector<CanvasWidget::RoiAnnotation> copy;
+    copy.reserve(int(rois.size()));
+    for (const auto& roi : rois) copy.append(roi);
+    QString error;
+    if (!AnnotationStore::setSliceRois(uid, slice, copy, &error))
+        statusBar()->showMessage(error, 8000);
+}
+
+// One CSV for the open series: every ROI the sidecar holds, with its statistics recomputed against
+// the slice's own pixels when that slice is loaded, or left as geometry only when it is not. The file
+// carries no patient identifiers — series UID and slice numbers only.
+void MainWindow::exportMeasurements()
+{
+    if (m_currentSeries < 0) return;
+    const QString uid = currentSeriesUid();
+    const auto stored = AnnotationStore::load(uid, nullptr);
+    if (stored.isEmpty()) {
+        statusBar()->showMessage("This series has no saved measurements to export", 5000);
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(this, "Export measurements", "measurements.csv",
+                                                     "CSV (*.csv)");
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        statusBar()->showMessage("Could not write the CSV file: " + file.errorString(), 8000);
+        return;
+    }
+    QTextStream out(&file);
+    out << "series_uid,slice,shape,row0,col0,row1,col1,pixels,mean,sd,min,max,area_mm2\n";
+    int rows = 0;
+    for (const auto& entry : stored) {
+        for (const auto& roi : entry.rois) {
+            // Recompute against the live canvas only for the slice on screen; a stored geometry
+            // without pixels is written with empty statistics rather than invented ones.
+            QString mean, sd, minimum, maximum, area, pixels;
+            if (entry.slice == m_currentSlice) {
+                for (const auto& live : m_canvas->rois()) {
+                    if (live.row0 == roi.row0 && live.col0 == roi.col0 && live.row1 == roi.row1 &&
+                        live.col1 == roi.col1) {
+                        mean = QString::number(live.mean, 'f', 2);
+                        sd = QString::number(live.stddev, 'f', 2);
+                        minimum = QString::number(live.min, 'f', 2);
+                        maximum = QString::number(live.max, 'f', 2);
+                        area = live.areaKnown ? QString::number(live.areaMm2, 'f', 2) : QString();
+                        pixels = QString::number(live.pixels);
+                        break;
+                    }
+                }
+            }
+            out << QStringLiteral("%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13\n")
+                       .arg(uid)
+                       .arg(entry.slice)
+                       .arg(roi.ellipse ? "ellipse" : "rectangle")
+                       .arg(roi.row0).arg(roi.col0).arg(roi.row1).arg(roi.col1)
+                       .arg(pixels, mean, sd, minimum, maximum, area);
+            ++rows;
+        }
+    }
+    file.close();
+    statusBar()->showMessage(QString("Exported %1 ROIs to %2").arg(rows).arg(path), 6000);
+}
+
 // A folder dropped anywhere on the window opens it; a single DICOM file opens its folder (the scan
 // reads every object in the folder; one file alone is not a study).
 void MainWindow::dragEnterEvent(QDragEnterEvent* event)
@@ -657,6 +779,18 @@ void MainWindow::setActiveTool(ActiveTool tool)
         hint = "Measurement tool — left-drag draws a distance; Shift+click three points (second = "
                "vertex) draws an angle. The measurement tool takes over the LEFT drag until you "
                "switch back";
+        break;
+    case ActiveTool::RoiRect:
+        if (!m_roiRectAction->isChecked()) m_roiRectAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::RoiRect);
+        hint = "Rectangle ROI — left-drag a region for mean, SD, min, max and area; right-drag pans. "
+               "Kept with the series";
+        break;
+    case ActiveTool::RoiEllipse:
+        if (!m_roiEllipseAction->isChecked()) m_roiEllipseAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::RoiEllipse);
+        hint = "Ellipse ROI — left-drag an ellipse for mean, SD, min, max and area; right-drag pans. "
+               "Kept with the series";
         break;
     case ActiveTool::WindowLevel:
     default:
@@ -897,6 +1031,7 @@ void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
         m_currentIsColour ? QString("Presets need a grayscale image") : QString());
     m_sliceBar->setCurrentSlice(index);
     m_canvas->setFrame(std::move(frame));
+    loadAnnotationsForSlice(index);
     updateInfo();
 
     // Smooth scroll (radiology report: the wheel stutters and skips): with the display settled,

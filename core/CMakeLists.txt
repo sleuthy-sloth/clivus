@@ -8,6 +8,7 @@ add_library(clivus_core STATIC
     src/manual_search.cpp
     src/volume.cpp
     src/series_index.cpp
+    src/roi.cpp
 )
 target_include_directories(clivus_core PUBLIC include)
 target_link_libraries(clivus_core PUBLIC clivus_version)
@@ -53,6 +54,10 @@ target_link_libraries(clivus_test_manual_search PRIVATE clivus_core)
 add_test(NAME manual_search COMMAND clivus_test_manual_search)
 
 # Needs testdata/corpus: the scan is only interesting when there are objects to walk over.
+add_executable(clivus_test_roi tests/test_roi.cpp)
+target_link_libraries(clivus_test_roi PRIVATE clivus_core)
+add_test(NAME roi COMMAND clivus_test_roi)
+
 add_executable(clivus_test_scan tests/test_scan.cpp)
 target_link_libraries(clivus_test_scan PRIVATE clivus_core)
 add_test(NAME scan COMMAND clivus_test_scan "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "canvas_widget.h"
 
+#include "clivus/roi.h"
+
 #include "style.h"
 
 #include <QCursor>
@@ -109,6 +111,17 @@ int CanvasWidget::measurementCount() const
     return int(m_distances.size() + m_angles.size());
 }
 
+QPointF CanvasWidget::frameToWidget(QPointF imagePixel) const
+{
+    if (!m_frame.valid()) return QPointF();
+    const double W = width(), H = height();
+    const double fit = std::min(W / m_frame.width, H / m_frame.height) * m_zoom;
+    const double w = m_frame.width * fit, h = m_frame.height * fit;
+    const double x0 = (W - w) / 2.0 + m_pan.x();
+    const double y0 = (H - h) / 2.0 + m_pan.y();
+    return QPointF(imagePixel.x() * fit + x0, imagePixel.y() * fit + y0);
+}
+
 QPointF CanvasWidget::mapToFrame(QPointF widget) const
 {
     if (!m_frame.valid()) return QPointF();
@@ -153,6 +166,104 @@ void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& t
     p.fillRect(r.adjusted(-3, -3, 3, 3), QColor(0, 0, 0, 160));   // backing: readable on any image
     p.setPen(QPen(clivus::style::accent().darker(115), 1.0));
     p.drawText(r, 0, text);
+}
+
+CanvasWidget::RoiAnnotation CanvasWidget::buildRoi(const bool ellipse, int row0, int col0,
+                                                   int row1, int col1) const
+{
+    RoiAnnotation roi;
+    roi.ellipse = ellipse;
+    if (row0 > row1) std::swap(row0, row1);
+    if (col0 > col1) std::swap(col0, col1);
+    roi.row0 = std::max(0, std::min(row0, m_frame.height - 1));
+    roi.row1 = std::max(0, std::min(row1, m_frame.height - 1));
+    roi.col0 = std::max(0, std::min(col0, m_frame.width - 1));
+    roi.col1 = std::max(0, std::min(col1, m_frame.width - 1));
+    if (!m_frame.valid() || m_frame.isColour()) return roi;   // colour frames carry no HU to average
+    const clivus::RoiStats stats = clivus::roiStats(
+        m_frame.pixels.data(), m_frame.height, m_frame.width,
+        ellipse ? clivus::RoiShape::Ellipse : clivus::RoiShape::Rectangle, roi.row0, roi.col0,
+        roi.row1, roi.col1, m_frame.pixelSpacingRow, m_frame.pixelSpacingCol);
+    roi.pixels = stats.pixels;
+    roi.mean = stats.mean;
+    roi.stddev = stats.stddev;
+    roi.min = stats.min;
+    roi.max = stats.max;
+    roi.areaMm2 = stats.areaMm2;
+    roi.areaKnown = stats.areaMm2 > 0.0;
+    return roi;
+}
+
+void CanvasWidget::setRois(std::vector<RoiAnnotation> rois)
+{
+    m_rois = std::move(rois);
+    update();
+}
+
+void CanvasWidget::clearRois()
+{
+    if (m_rois.empty()) return;
+    m_rois.clear();
+    emit roisChanged();
+    update();
+}
+
+bool CanvasWidget::removeLastRoi()
+{
+    if (m_rois.empty()) return false;
+    m_rois.pop_back();
+    emit roisChanged();
+    update();
+    return true;
+}
+
+void CanvasWidget::refreshRoiStats()
+{
+    if (m_rois.empty() || !m_frame.valid()) return;
+    for (RoiAnnotation& roi : m_rois)
+        roi = buildRoi(roi.ellipse, roi.row0, roi.col0, roi.row1, roi.col1);
+    update();
+}
+
+void CanvasWidget::drawRois(QPainter& painter) const
+{
+    if (m_frame.width <= 0 || m_frame.height <= 0) return;
+    // Image pixels -> widget: the same fit/map paintGL uses, via mapToFrame inverted. Instead of
+    // inverting per point, draw in image space by mapping the frame rect corners.
+    auto toWidget = [this](double col, double row) { return frameToWidget(QPointF(col, row)); };
+
+    const QColor stroke(0x3d, 0x9e, 0xbe, 230);
+    for (const RoiAnnotation& roi : m_rois) {
+        const QPointF a = toWidget(roi.col0 - 0.5, roi.row0 - 0.5);
+        const QPointF b = toWidget(roi.col1 + 0.5, roi.row1 + 0.5);
+        QRectF rect(a, b);
+        rect = rect.normalized();
+        painter.setPen(QPen(stroke, 1.4));
+        painter.setBrush(Qt::NoBrush);
+        if (roi.ellipse)
+            painter.drawEllipse(rect);
+        else
+            painter.drawRect(rect);
+        QString text = QStringLiteral("mean %1  sd %2\nmin %3  max %4")
+                           .arg(roi.mean, 0, 'f', 1)
+                           .arg(roi.stddev, 0, 'f', 1)
+                           .arg(roi.min, 0, 'f', 1)
+                           .arg(roi.max, 0, 'f', 1);
+        text += roi.areaKnown ? QStringLiteral("\narea %1 mm²").arg(roi.areaMm2, 0, 'f', 1)
+                              : QStringLiteral("\narea unknown (no spacing)");
+        drawMeasurementText(painter, rect.topLeft() + QPointF(2, -4), text);
+    }
+
+    // Live drag: outline only, no numbers until release (half a region has half the statistics).
+    if (m_roiDragging && (m_roiEnd - m_roiStart).manhattanLength() >= 2) {
+        QRectF live(m_roiStart, m_roiEnd);
+        live = live.normalized();
+        painter.setPen(QPen(stroke, 1.2, Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        const bool ellipse = m_toolHint == ToolHint::RoiEllipse;
+        if (ellipse) painter.drawEllipse(live);
+        else painter.drawRect(live);
+    }
 }
 
 void CanvasWidget::drawMeasurements(QPainter& painter) const
@@ -306,7 +417,8 @@ void CanvasWidget::paintGL()
     // intercept mouse input (roadmap 2.6). Consistent font and contrast, one call, no animations.
     // The measurement overlays always draw when present - the canvas has nothing better to show
     // than its own measurements, with or without the corner overlay text sharing the pass.
-    if (measurementCount() > 0 || m_measureDragging || !m_anglePending.empty() ||
+    if (measurementCount() > 0 || m_measureDragging || !m_anglePending.empty() || !m_rois.empty() ||
+        m_roiDragging ||
         !m_overlayLeft.isEmpty() || !m_overlayRight.isEmpty()) {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
@@ -314,6 +426,7 @@ void CanvasWidget::paintGL()
         font.setPointSizeF(10.0);
         painter.setFont(font);
         drawMeasurements(painter);
+        drawRois(painter);
         const QColor text(0xe6, 0xe6, 0xe6, 230);
         const QColor shadow(0, 0, 0, 160);   // enough contrast on any image, still plain
         const int pad = 8;
@@ -381,6 +494,17 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e)
         update();
         return;
     }
+    // ROI tools: left-drag draws the region (the deliberate, stated interaction for these tools);
+    // right-drag still pans so a mis-click never traps the view.
+    if ((m_toolHint == ToolHint::RoiRect || m_toolHint == ToolHint::RoiEllipse) &&
+        e->button() == Qt::LeftButton && !m_frame.isColour()) {
+        m_drag = Drag::Roi;
+        m_roiDragging = true;
+        m_roiStart = QPointF(e->pos());
+        m_roiEnd = m_roiStart;
+        update();
+        return;
+    }
     m_drag = (e->button() == Qt::LeftButton) ? Drag::Window : Drag::Pan;
 }
 
@@ -391,6 +515,11 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
 
     if (m_drag == Drag::Measure) {
         m_measureEnd = QPointF(e->pos());
+        update();
+        return;
+    }
+    if (m_drag == Drag::Roi) {
+        m_roiEnd = QPointF(e->pos());
         update();
         return;
     }
@@ -412,6 +541,21 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent*)
 {
+    if (m_drag == Drag::Roi) {
+        m_drag = Drag::None;
+        m_roiDragging = false;
+        const QPointF a = mapToFrame(m_roiStart);
+        const QPointF b = mapToFrame(m_roiEnd);
+        // A drag shorter than a couple of image pixels is a click, not a region.
+        if (std::abs(b.x() - a.x()) >= 2.0 && std::abs(b.y() - a.y()) >= 2.0) {
+            m_rois.push_back(buildRoi(m_toolHint == ToolHint::RoiEllipse, int(std::lround(a.y())),
+                                      int(std::lround(a.x())), int(std::lround(b.y())),
+                                      int(std::lround(b.x()))));
+            emit roisChanged();
+        }
+        update();
+        return;
+    }
     if (m_drag == Drag::Measure) {
         m_drag = Drag::None;
         const bool meaningful = (m_measureEnd - m_measureStart).manhattanLength() >= 2;

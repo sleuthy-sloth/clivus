@@ -21,7 +21,7 @@ public:
     // interaction change: while the Measure tool is active, the LEFT drag draws a measurement
     // instead of moving window/level (that is what the tool is for; the measure action says so in
     // its hint text, and switching back to any other tool restores the default gesture).
-    enum class ToolHint { WindowLevel, Pan, Pointer, Measure };
+    enum class ToolHint { WindowLevel, Pan, Pointer, Measure, RoiRect, RoiEllipse };
     void setToolHint(ToolHint hint);
 
     // A distance is two image points; an angle is three (the second is the vertex). Points are
@@ -37,6 +37,25 @@ public:
         double angle_deg = 0.0;
     };
     // The object's physical pixel size in mm, from the decoded frame (0 = header said nothing).
+    // A region of interest, stored in IMAGE pixel coordinates (not widget ones) so it survives zoom,
+    // pan and a reload from disk unchanged. Statistics are derived from the frame's modality values
+    // and are recomputed on load rather than trusted from a file.
+    struct RoiAnnotation {
+        bool ellipse = false;
+        int row0 = 0, col0 = 0, row1 = 0, col1 = 0;   // inclusive image-pixel bounds
+        // Derived, never persisted:
+        int pixels = 0;
+        double mean = 0.0, stddev = 0.0, min = 0.0, max = 0.0, areaMm2 = 0.0;
+        bool areaKnown = false;
+    };
+    void setRois(std::vector<RoiAnnotation> rois);   // for the slice currently shown
+    const std::vector<RoiAnnotation>& rois() const { return m_rois; }
+    void clearRois();
+    bool removeLastRoi();
+    // Recomputes the statistics of every ROI against the frame now loaded (used after a reload and
+    // after a window change does not alter modality values - only after a new frame).
+    void refreshRoiStats();
+
     void setPixelSpacing(double rowSpacingMm, double colSpacingMm);
     void clearMeasurements();
     int measurementCount() const;
@@ -65,6 +84,8 @@ public:
 
 signals:
     void windowChanged(double center, double width);
+    // A ROI was added or removed: the window persists the current slice's list.
+    void roisChanged();
     void viewChanged();                        // zoom or pan moved: overlays should refresh
     void scrollRequested(int delta);          // wheel: next/previous slice
     void frameTiming(double windowMs, double paintMs, double fps);
@@ -83,12 +104,17 @@ private:
     void uploadTexture();
     // Widget point -> image-pixel point (the inverse of the rect fit/map in paintGL).
     QPointF mapToFrame(QPointF widget) const;
+    // The inverse of mapToFrame: image-pixel point -> widget point. ROIs are stored in image pixels
+    // and must land correctly after any zoom or pan.
+    QPointF frameToWidget(QPointF imagePixel) const;
     // mm for two widget points, and the interior angle at the middle of three (degrees). Both
     // return 0 when the geometry degenerates; distance reports spacing_known = false when the
     // header gave no spacing (never invent one).
     double distanceMm(QPointF p1, QPointF p2, bool& spacingKnown) const;
     double angleDeg(QPointF p1, QPointF p2, QPointF p3) const;
     void drawMeasurements(QPainter& painter) const;
+    void drawRois(QPainter& painter) const;
+    RoiAnnotation buildRoi(bool ellipse, int row0, int col0, int row1, int col1) const;
     void drawMeasurementText(QPainter& p, QPointF at, const QString& text) const;
 
     clivus::ImageFrame m_frame;
@@ -100,6 +126,9 @@ private:
     QPointF m_measureStart, m_measureEnd;
     bool m_measureDragging = false;
     std::vector<QPointF> m_anglePending;   // 1 or 2 gathered clicks while an angle is in progress
+    std::vector<RoiAnnotation> m_rois;     // ROIs of the slice currently shown
+    QPointF m_roiStart, m_roiEnd;          // live drag, widget coordinates
+    bool m_roiDragging = false;
     double m_spacingRow = 0.0, m_spacingCol = 0.0;
     int m_crosshairV = -1, m_crosshairH = -1;
     int m_lastFrameIndex = -1;   // measurements belong to one slice: cleared when the index changes
@@ -118,7 +147,7 @@ private:
     float m_zoom = 1.0f;
     QPointF m_pan;
     QPoint m_lastMouse;
-    enum class Drag { None, Window, Pan, Measure } m_drag = Drag::None;
+    enum class Drag { None, Window, Pan, Measure, Roi } m_drag = Drag::None;
     ToolHint m_toolHint = ToolHint::WindowLevel;
     double m_windowMs = 0.0;
     std::chrono::steady_clock::time_point m_lastPaint{};
