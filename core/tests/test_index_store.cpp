@@ -10,11 +10,7 @@
 #include <fstream>
 #include <string>
 
-#if defined(_WIN32)
 #include <cstdlib>
-#else
-#include <sys/stat.h>
-#endif
 
 namespace fs = std::filesystem;
 
@@ -196,23 +192,20 @@ int main()
         expect(!fs::exists(legacyPath), "legacy in-folder index is gone (it stored patient names)");
     }
 
-    // --- read-only cache directory: the store reports unusable instead of crashing
+    // --- unusable cache directory: the same promise on every platform. A path whose parent is a
+    // regular FILE cannot be created, which is portable (chmod 0500 makes a directory unwritable on
+    // POSIX but has no effect on Windows, so the earlier version of this check silently passed on
+    // Windows by not testing anything).
     {
-        const fs::path roCache = root / "ro-cache";
-        fs::create_directories(roCache, ec);
-#ifndef _WIN32
-        ::chmod(roCache.c_str(), 0500);   // r-x: cannot create files
-#endif
-        setEnv("CLIVUS_CACHE_DIR", roCache.string());
+        const fs::path blocker = root / "blocked-cache";
+        { std::ofstream file(blocker); file << "not a directory"; }
+        setEnv("CLIVUS_CACHE_DIR", (blocker / "index").string());
         clivus::IndexStore store;
         const bool opened = store.open(dir.string());
-        expect(!opened, "an unwritable cache directory yields an unusable cache, not a crash");
+        expect(!opened, "an unusable cache directory yields an unusable cache, not a crash");
         expect(!store.available(), "unusable cache reports unavailable (caller scans uncached)");
         expect(!store.save(written), "saving without a database fails cleanly");
         expect(store.load().empty(), "loading without a database returns a miss");
-#ifndef _WIN32
-        ::chmod(roCache.c_str(), 0700);
-#endif
         setEnv("CLIVUS_CACHE_DIR", cache.string());
     }
 
