@@ -85,7 +85,7 @@ First configure compiles DCMTK + OpenJPEG from source through vcpkg (~20–30 mi
 
 **Pass criteria for this step**
 
-- [ ] all three tests green: `image_frame`, `decode_matrix`, `index_store`
+- [ ] all four tests green: `image_frame`, `decode_matrix`, `index_store`, `volume`
 - [ ] `decode_matrix` reports `decoders in this build: RLE, JPEG, JPEG-LS, JPEG 2000`
 - [ ] `MR_small_jp2klossless.dcm` row says **`OK … identical to MR_small.dcm`** (this is the J2K
       decoder that Homebrew's DCMTK does not have — it is the reason `vcpkg.json` asks for `openjpeg`)

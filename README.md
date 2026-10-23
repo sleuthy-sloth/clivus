@@ -1,8 +1,14 @@
 # Clivus
 
+[![Windows core tests](https://github.com/sleuthy-sloth/clivus/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/sleuthy-sloth/clivus/actions/workflows/windows.yml)
+![Windows GUI build](https://github.com/sleuthy-sloth/clivus/actions/workflows/windows-app.yml/badge.svg)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
+![Qt 6](https://img.shields.io/badge/Qt-6.8%2B-41CD52?logo=qt&logoColor=white)
+![Licence](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)
+
 A **new** cross-platform DICOM viewer, workflow-compatible with Horos/OsiriX, aimed at Windows first.
-Not a fork: no Horos source is copied here (see `../horos-port/HOROS-WINDOWS-PORT-FEASIBILITY.md`
-for the reasoning and the measured evidence). "Horos" and "OsiriX" are trademarks of their
+Not a fork: no Horos source is copied here — the port-feasibility analysis and its measured
+evidence live outside this repository. "Horos" and "OsiriX" are trademarks of their
 respective owners; nothing is derived from them.
 
 **Research tool, not a medical device** — no regulatory clearance, no clinical validation.
@@ -36,7 +42,8 @@ build/mac/app/clivus testdata/synthetic512 --bench 150   # fps at 512²
 
 `testdata/make_synthetic.py` writes an 8-slice signed 12-bit CT series with slope/intercept and
 PixelPaddingValue, so the loader is testable without patient data; `testdata/corpus/` also holds
-two small pydicom sample objects (CT_small, MR_small) for a real-world sanity check.
+ten small pydicom sample objects (CT_small, MR_small, and the compressed variants) for a real-world
+sanity check.
 
 Windows (MSVC + vcpkg; needs `VCPKG_ROOT` set) — full runbook with pass criteria in
 [`docs/windows.md`](docs/windows.md):
@@ -155,7 +162,8 @@ test targets only; without that the CI suite proved nothing.
   (vcpkg `dcmtk[openjpeg]`) until this tree vendors its own DCMTK build
 - VTK / MPR / 3D (decided for v1, starts after the spike)
 - Measurement tools, PACS networking, plugin ABI
-- Any Grøk/AGPL component — the shipped Horos 4.0.1 statically contains it; this tree does not
+- No AGPL component of any kind: the shipped Horos 4.0.1 binary statically contains AGPL-licensed
+  code; this tree contains none
 
 ## Next tickets after the spike
 

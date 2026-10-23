@@ -21,9 +21,9 @@ binaries you are responsible for shipping the corresponding notices.
 | CharLS | BSD-2-clause | JPEG-LS. |
 | OpenJPEG | BSD-2-clause | JPEG 2000. Enabled with the `openjpeg` vcpkg feature; **not** present in the Homebrew DCMTK build. |
 
-Clivus contains **no Grøk** and no other AGPL component: the shipped Horos 4.0.1 binary this project
-was measured against does bundle AGPL-3.0 Grøk (see `HOROS-WINDOWS-PORT-FEASIBILITY.md` §2.3), which
-is one more reason the codebase is new rather than a port.
+Clivus contains **no AGPL component of any kind**: the shipped Horos 4.0.1 binary statically contains
+AGPL-licensed code, and none of it is derived from, copied into, or bundled with this tree. This is
+not a port of Horos or any other viewer.
 
 ## Test data
 
