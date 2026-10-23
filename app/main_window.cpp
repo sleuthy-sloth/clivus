@@ -2,6 +2,7 @@
 #include "main_window.h"
 
 #include "about_dialog.h"
+#include "server_dialog.h"
 #include "series_summary.h"
 #include "branding.h"
 
@@ -206,6 +207,16 @@ MainWindow::MainWindow(QWidget* parent)
         const QString dir = QFileDialog::getExistingDirectory(this, "DICOM folder");
         if (!dir.isEmpty()) openFolder(dir);
     });
+    // Network access (roadmap D1): a DICOMweb study comes down into the cache and then opens
+    // through the ordinary scan path — one decode route, not two.
+    auto* openFromServer = new QAction("Open from &server…", this);
+    openFromServer->setToolTip("Search a DICOMweb (QIDO-RS/WADO-RS) server and download a study");
+    connect(openFromServer, &QAction::triggered, this, [this] {
+        ServerDialog dialog(this);
+        connect(&dialog, &ServerDialog::studyReady, this,
+                [this](const QString& folder) { openFolder(folder); });
+        dialog.exec();
+    });
     auto* quit = new QAction("E&xit", this);
     quit->setShortcut(QKeySequence::Quit);
     connect(quit, &QAction::triggered, this, &QWidget::close);
@@ -308,6 +319,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     auto* file = menuBar()->addMenu("&File");
     file->addAction(open);
+    file->addAction(openFromServer);
     file->addSeparator();
     file->addAction(quit);
 
