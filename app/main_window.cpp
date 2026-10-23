@@ -572,6 +572,16 @@ bool MainWindow::selectSeriesForCapture(const QString& modality)
     return false;
 }
 
+QImage MainWindow::captureCanvasImage()
+{
+    return m_canvas ? m_canvas->grabFramebuffer() : QImage();
+}
+
+QPoint MainWindow::captureCanvasPosition() const
+{
+    return m_canvas ? m_canvas->mapTo(this, QPoint(0, 0)) : QPoint();
+}
+
 bool MainWindow::canvasReady() const
 {
     return m_canvas != nullptr && m_canvas->hasValidFrame();

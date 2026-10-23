@@ -7,6 +7,7 @@
 #include <QIcon>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QPainter>
 #include <QStandardPaths>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -118,8 +119,17 @@ int main(int argc, char** argv)
                 QApplication::processEvents(QEventLoop::AllEvents, 50);
                 QThread::msleep(30);
             }
-            if (!window.grab().save(dir + QStringLiteral("/viewer.png")))
-                return 2;
+            QImage shot = window.grab().toImage();
+            // The canvas is a QOpenGLWidget: its pixels live in a GL framebuffer that a widget
+            // grab does not include. Ask it for its framebuffer and paste it at the widget's
+            // position — both images are this process's own render, nothing synthesised.
+            const QImage canvas = window.captureCanvasImage();
+            if (!canvas.isNull() && !shot.isNull()) {
+                QPainter painter(&shot);
+                painter.drawImage(window.captureCanvasPosition(), canvas);
+                painter.end();
+            }
+            if (!shot.save(dir + QStringLiteral("/viewer.png"))) return 2;
         }
         return 0;
     }

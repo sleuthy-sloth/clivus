@@ -47,6 +47,11 @@ public:
     // ask for a chosen series so a capture shows anatomy rather than whichever row sorts first.
     bool canvasReady() const;
     bool selectSeriesForCapture(const QString& modality);
+    // Documentation capture: QWidget::grab() does not composite a QOpenGLWidget's framebuffer, so
+    // the capture path asks for the canvas separately and pastes it in. Both pieces are real
+    // renders from this process.
+    QImage captureCanvasImage();
+    QPoint captureCanvasPosition() const;
     bool hasSeriesForCapture() const { return m_canvas != nullptr && !m_series.empty(); }
     void openMprForTest() { openMprView(); }
 
