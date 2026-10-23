@@ -154,14 +154,14 @@ const Chapter kChapters[] = {
  "steps that reproduce it and the exact status-bar message — with a test dataset, never a "
  "real patient file or a screenshot of one.</p>"},
 {"Limitations and Research Use",
- "<p>As of v0.1: explicit-VR little-endian and the RLE / JPEG / JPEG-LS lossless and "
+ "<p>As of v0.1.2: explicit-VR little-endian and the RLE / JPEG / JPEG-LS lossless and "
  "near-lossless codecs decode with pixel-exact, test-asserted output; JPEG 2000 decodes where "
  "the DCMTK build carries it (the Windows release build does). Colour: RGB and YBR_FULL, "
  "planar variants converted. Multi-frame objects are browsed in full. RT Dose objects read in "
  "real dose units via DoseGridScaling.</p>"
- "<p>Not supported: <b>PALETTE COLOR</b> and non-linear LUT Sequences decode as stored "
- "values with no transform; no orientation markers, no MPR/3D, no measurements, no DICOM "
- "networking, no anonymisation.</p>"
+ "<p>Modality LUT Sequences (non-linear) and PALETTE COLOR palettes are applied at decode "
+ "time, so their windows and colours are the tables' own. Not supported: orientation markers, "
+ "MPR/3D, measurements, DICOM networking, anonymisation.</p>"
  "<p>Every claim in this chapter is backed by a test in the repository; the parity gate "
  "fails CI if window/level rendering drifts from the library's own semantics.</p>"},
 {"About Clivus",
