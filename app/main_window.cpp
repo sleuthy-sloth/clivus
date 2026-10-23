@@ -4,10 +4,12 @@
 #include "clivus/version.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QDir>
 #include <QFileDialog>
 #include <QIcon>
 #include <QImage>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenuBar>
@@ -30,6 +32,7 @@
 #include "canvas_widget.h"
 #include "help_window.h"
 #include "style.h"
+#include "view_controls.h"
 
 namespace {
 
@@ -96,10 +99,38 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_seriesList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_canvas = new CanvasWidget(this);
+    // The gestures are fixed regardless of the highlighted tool, so they are stated once here
+    // (roadmap 2.1) instead of being implied by whichever action happens to be checked.
+    m_canvas->setToolTip("Left-drag = window/level · Right-drag = pan · Double-click or R = reset view "
+                         "· Wheel = slices · Ctrl+wheel = zoom");
+    m_sliceBar = new SliceBar(this);
+    m_windowBar = new WindowLevelBar(this);
+    m_presetBar = new WindowPresetBar(this);
+
+    // One options bar: numeric window/level, then the preset selector, on the line above the image.
+    auto* optionsBar = new QWidget(this);
+    auto* optionsLayout = new QHBoxLayout(optionsBar);
+    optionsLayout->setContentsMargins(4, 0, 8, 0);
+    optionsLayout->setSpacing(clivus::style::kSpacing);
+    optionsLayout->addWidget(m_windowBar, 0);
+    optionsLayout->addWidget(m_presetBar, 0);
+    optionsLayout->addStretch(1);
+
+    // Canvas plus the slice strip under it: one viewer page inside the splitter, so the sidebar
+    // splitter still divides browser and image as before.
+    auto* viewer = new QWidget(this);
+    auto* viewerLayout = new QVBoxLayout(viewer);
+    viewerLayout->setContentsMargins(0, 0, 0, 0);
+    viewerLayout->setSpacing(0);
+    // Options bar above the image, slice strip below it: the two controls the user reaches for most
+    // often sit next to the picture rather than in a dialog (roadmap 2.2/2.5).
+    viewerLayout->addWidget(optionsBar, 0);
+    viewerLayout->addWidget(m_canvas, 1);
+    viewerLayout->addWidget(m_sliceBar, 0);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->addWidget(m_seriesList);
-    m_splitter->addWidget(m_canvas);
+    m_splitter->addWidget(viewer);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setSizes({320, 900});
 
@@ -165,21 +196,39 @@ MainWindow::MainWindow(QWidget* parent)
     reset->setToolTip("Restore default zoom, pan and window/level (double-click or R on the canvas)");
     connect(reset, &QAction::triggered, m_canvas, &CanvasWidget::resetView);
 
-    auto* wl = new QAction("&Window/Level", this);
-    wl->setIcon(QIcon::fromTheme("contrast"));
-    wl->setToolTip("Drag with the LEFT mouse button on the canvas: horizontal = width, vertical = centre");
-    // The gesture already exists on the canvas; the action itself just points to it, so the control
-    // never pretends to be a command it is not.
-    connect(wl, &QAction::triggered, this, [this] {
-        statusBar()->showMessage("Drag with the LEFT mouse button on the canvas to adjust window/level", 4000);
-    });
+    // Tools (roadmap 2.1/2.6). Both gestures are always live on the canvas; these actions only say
+    // which one the UI is presenting, and they are checkable and exclusive so the toolbar, the menu and
+    // the cursor can never disagree about the active tool.
+    m_windowAction = new QAction("&Window/Level", this);
+    m_windowAction->setIcon(QIcon::fromTheme("contrast"));
+    m_windowAction->setToolTip("Window/level tool (cross cursor). Left-drag on the image: horizontal = "
+                               "width, vertical = centre. Right-drag still pans.");
+    m_windowAction->setCheckable(true);
+    m_windowAction->setChecked(true);
 
-    auto* pan = new QAction("&Pan", this);
-    pan->setIcon(QIcon::fromTheme("transform-move"));
-    pan->setToolTip("Drag with the RIGHT mouse button on the canvas to move the image");
-    connect(pan, &QAction::triggered, this, [this] {
-        statusBar()->showMessage("Drag with the RIGHT mouse button on the canvas to pan the image", 4000);
-    });
+    m_panAction = new QAction("&Pan", this);
+    m_panAction->setIcon(QIcon::fromTheme("transform-move"));
+    m_panAction->setToolTip("Pan tool (open-hand cursor). Right-drag on the image to move it; "
+                            "left-drag still adjusts window/level.");
+    m_panAction->setCheckable(true);
+
+    m_pointerAction = new QAction("&Pointer", this);
+    auto* pointer = m_pointerAction;
+    pointer->setIcon(QIcon::fromTheme("cursor-arrow"));
+    pointer->setToolTip("Pointer tool (arrow cursor), for looking without an active adjustment. Both "
+                        "drags keep working.");
+    pointer->setCheckable(true);
+
+    m_toolGroup = new QActionGroup(this);
+    m_toolGroup->setExclusive(true);
+    for (auto* a : {m_windowAction, m_panAction, pointer}) {
+        a->setActionGroup(m_toolGroup);
+        m_toolGroup->addAction(a);
+    }
+    connect(m_windowAction, &QAction::triggered, this,
+            [this] { setActiveTool(ActiveTool::WindowLevel); });
+    connect(m_panAction, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pan); });
+    connect(pointer, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pointer); });
 
     auto* sidebar = new QAction("&Series sidebar", this);
     sidebar->setToolTip("Show or hide the series browser");
@@ -222,6 +271,12 @@ MainWindow::MainWindow(QWidget* parent)
     view->addAction(sidebar);
     view->addSeparator();
     view->addAction(diagnostics);
+    view->addSeparator();
+    // The same QAction instances the toolbar shows, in one exclusive group (roadmap 6.3).
+    auto* tools = view->addMenu("&Tools");
+    tools->addAction(m_windowAction);
+    tools->addAction(m_panAction);
+    tools->addAction(pointer);
 
     auto* help = menuBar()->addMenu("&Help");
     help->addAction(manual);
@@ -232,7 +287,11 @@ MainWindow::MainWindow(QWidget* parent)
     toolbar->setMovable(false);
     toolbar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     toolbar->setIconSize(QSize(clivus::style::kIconSize, clivus::style::kIconSize));
-    for (auto* a : {open, fit, pan, wl, reset}) toolbar->addAction(a);
+    for (auto* a : {open, fit}) toolbar->addAction(a);
+    toolbar->addSeparator();
+    for (auto* a : {m_windowAction, m_panAction, pointer}) toolbar->addAction(a);   // exclusive tool set
+    toolbar->addSeparator();
+    for (auto* a : {reset}) toolbar->addAction(a);
 
     setMinimumSize(720, 480);   // narrower windows clip the toolbar and sidebar
     // Empty state (roadmap 1.6): what Clivus does, a prominent way in, and a route to the manual.
@@ -277,11 +336,20 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
+    connect(m_sliceBar, &SliceBar::sliceRequested, this, &MainWindow::goToSlice);
+    // The canvas is the one that changes values by dragging; it reports them here, this is where they
+    // become the canonical state, and the fields are refreshed from it (roadmap 2.2/6.3).
     connect(m_canvas, &CanvasWidget::windowChanged, this, [this](double c, double w) {
         if (m_currentSeries < 0) return;
+        m_center = c;
+        m_width = w;
         m_windowLevel = QString("WC %1  WW %2").arg(c, 0, 'f', 1).arg(w, 0, 'f', 1);
+        m_windowBar->setValues(c, w);
+        m_presetBar->syncTo(c, w);   // names the preset only while the numbers still match it
         updateInfo();
     });
+    connect(m_windowBar, &WindowLevelBar::windowLevelEdited, this, &MainWindow::setWindowLevel);
+    connect(m_presetBar, &WindowPresetBar::presetChosen, this, &MainWindow::setWindowLevel);
     connect(m_canvas, &CanvasWidget::viewChanged, this, [this] { updateInfo(); });
     connect(m_canvas, &CanvasWidget::frameTiming, this,
             [this](double windowMs, double paintMs, double fps) {
@@ -291,6 +359,37 @@ MainWindow::MainWindow(QWidget* parent)
                                .arg(fps, 0, 'f', 0);
                 updateInfo();
             });
+}
+
+// One place that knows the active tool. The checked action is already the single truth in the UI - this
+// mirrors it into the cursor and the one-line hint so the three cannot drift (roadmap 2.1/2.6).
+// Switching tools changes feedback only; it never disables a gesture, so the user cannot get stuck in a
+// mode that does not do what they expect.
+void MainWindow::setActiveTool(ActiveTool tool)
+{
+    m_activeTool = tool;
+    QString hint;
+    switch (tool) {
+    case ActiveTool::Pan:
+        if (!m_panAction->isChecked()) m_panAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::Pan);
+        hint = "Pan tool — right-drag on the image to move it (left-drag still adjusts window/level)";
+        break;
+    case ActiveTool::Pointer:
+        if (!m_pointerAction->isChecked()) m_pointerAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::Pointer);
+        hint = "Pointer tool — no adjustment highlighted; left-drag = window/level, right-drag = pan";
+        break;
+    case ActiveTool::WindowLevel:
+    default:
+        if (!m_windowAction->isChecked()) m_windowAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::WindowLevel);
+        hint = "Window/level tool — left-drag on the image: horizontal = width, vertical = centre "
+               "(right-drag still pans)";
+        break;
+    }
+    // Transient hint, not the persistent state line: the status bar keeps reporting the study.
+    statusBar()->showMessage(hint, 5000);
 }
 
 void MainWindow::openFolder(const QString& dir)
@@ -310,6 +409,8 @@ void MainWindow::openFolder(const QString& dir)
     m_timing.clear();
     m_windowLevel.clear();
     m_canvas->setFrame(clivus::ImageFrame{});   // black, rather than the old folder's image
+    m_windowBar->setWindowingAvailable(true);
+    m_sliceBar->setSliceCount(0);
     m_centralStack->setCurrentIndex(1);         // off the empty state: the folder is being opened
     m_status->setText("Loading series…");
     startScan();
@@ -485,6 +586,18 @@ void MainWindow::sliceFinished()
     }
     m_currentSlice = r.index;
     m_currentIsColour = r.frame.isColour();
+    // Colour frames ignore the window (render() passes their samples through), so the fields stay
+    // visible but disabled, with the reason in the options bar as well as the overlay (roadmap 2.2).
+    m_windowBar->setWindowingAvailable(
+        !m_currentIsColour,
+        m_currentIsColour ? QString("Window/level does not apply to colour images")
+                          : QString());
+    m_presetBar->setAvailable(
+        !m_currentIsColour,
+        m_currentIsColour ? QString("Presets need a grayscale image") : QString());
+    // The strip lands on the slice that actually arrived; if the wheel had moved on, the check above
+    // already returned and the next decode will settle it.
+    m_sliceBar->setCurrentSlice(r.index);
     m_canvas->setFrame(std::move(r.frame));
     updateInfo();
     pumpSlice();     // the wheel may have moved while this decode was running
@@ -579,6 +692,7 @@ void MainWindow::showSeries(int index)
         m_currentSeries = -1;
         m_currentSlice = -1;
         m_desiredSlice = -1;
+        m_sliceBar->setSliceCount(0);
         m_status->setText("This series has no image objects in the index — try another series; the application remains usable.");
         return;
     }
@@ -589,6 +703,10 @@ void MainWindow::showSeries(int index)
     m_timing.clear();
     m_windowLevel.clear();
     m_canvas->setFrame(clivus::ImageFrame{});
+    // The strip's range is the series' flat frame count, so a multi-frame object counts as the
+    // slices it actually carries (the loader already flattens them).
+    m_sliceBar->setSliceCount(m_series[size_t(index)].totalFrames());
+    m_sliceBar->setCurrentSlice(0);
     m_desiredSlice = 0;
     pumpSlice();
 }
@@ -605,7 +723,35 @@ void MainWindow::showSlice(int delta)
     const int next = std::clamp(from + delta, 0, total - 1);
     if (next == m_desiredSlice && (m_sliceInFlight || next == m_currentSlice)) return;
     m_desiredSlice = next;
+    // The slider follows the slice the wheel is aiming at, not the one still decoding: during a fast
+    // spin the strip and the decode pump both chase the same target, and the pump decides when the
+    // decode happens, so this cannot outrun the coalescing in pumpSlice().
+    m_sliceBar->setCurrentSlice(next);
     pumpSlice();
+}
+
+// Absolute jump from the slice slider (roadmap 2.5). It only sets the target and lets pumpSlice()
+// coalesce it, so dragging across a long series issues one decode at a time and a late result for an
+// intermediate position is discarded by the same index check that protects the wheel path.
+void MainWindow::goToSlice(int index)
+{
+    if (m_currentSeries < 0) return;
+    const int total = m_series[size_t(m_currentSeries)].totalFrames();
+    if (total <= 0) return;
+    const int target = std::clamp(index, 0, total - 1);
+    if (target == m_desiredSlice && (m_sliceInFlight || target == m_currentSlice)) return;
+    m_desiredSlice = target;
+    pumpSlice();
+    if (!m_sliceInFlight) updateInfo();
+}
+
+// Single writer for the rendering state (roadmap 6.3). The canvas echoes the values back through
+// windowChanged, so the fields, the overlay and the status line all end up showing exactly what
+// ImageFrame::render() is being handed - none of them keeps its own copy to drift.
+void MainWindow::setWindowLevel(double center, double width)
+{
+    if (m_currentSeries < 0) return;
+    m_canvas->setWindowLevel(center, width);
 }
 
 void MainWindow::updateInfo(const QString& extra)
@@ -654,6 +800,13 @@ void MainWindow::updateInfo(const QString& extra)
                          .arg(total)
                          .arg(description.isEmpty() ? QString("(no description)") : description);
     if (!extra.isEmpty()) status += " — " + extra;
+    // Roadmap 2.2: colour frames are not a failure, but the missing window/level must be stated, not
+    // left for the user to discover by dragging with no effect.
+    // Zoom is viewport state, not series state: show it in the status bar only when it differs from
+    // the fitted default, so the common case stays quiet (roadmap 2.4).
+    if (zoom > 0.0 && std::abs(zoom - 1.0) > 0.001)
+        status += QString(" — zoom %1%").arg(int(zoom * 100.0 + 0.5));
+    if (m_currentIsColour) status += " — colour image: window/level is not applied";
     m_status->setText(status);
 }
 

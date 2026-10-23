@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "canvas_widget.h"
 
+#include <QCursor>
 #include <QDebug>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QWheelEvent>
@@ -14,6 +16,27 @@ CanvasWidget::CanvasWidget(QWidget* parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(320, 240);
+    setToolHint(ToolHint::WindowLevel);   // matches the default tool action the toolbar starts on
+}
+
+// Roadmap 2.6: the cursor says which tool is active. Cross for window/level, open hand for pan (the
+// gesture the hand describes), plain arrow when neither is highlighted. Both drags keep working in
+// every mode - the cursor is feedback, not a mode switch - which is why the tooltips spell out both
+// gestures rather than pretending the inactive one is unavailable.
+void CanvasWidget::setToolHint(ToolHint hint)
+{
+    switch (hint) {
+    case ToolHint::Pan:
+        setCursor(Qt::OpenHandCursor);
+        break;
+    case ToolHint::Pointer:
+        setCursor(Qt::ArrowCursor);
+        break;
+    case ToolHint::WindowLevel:
+    default:
+        setCursor(Qt::CrossCursor);
+        break;
+    }
 }
 
 void CanvasWidget::initializeGL()
@@ -57,16 +80,23 @@ void CanvasWidget::resetView()
     m_pan = QPointF(0, 0);
     m_texDirty = true;
     emit windowChanged(m_center, m_width);
+    emit viewChanged();   // zoom went back to 100%: the zoom readout has to say so
     update();
 }
 
-// "Fit" is the state setFrame() starts from: the image is always drawn to fit the viewport before
-// zoom is applied, so fitting is just zoom back to 1.0 (and re-centre), without touching the
-// window/level the user may have set.
+// Fit Image: zoom back to 1.0 (the image is always drawn fit to the viewport before zoom is
+// applied) and recentre, leaving window/level alone. Reset View is the stronger version: it also
+// restores the full dynamic window. Both emit viewChanged so the zoom percentage in the overlay and
+// the status line is never stale after a toolbar click.
+//
+// Slice changes keep zoom and pan: setFrame() is only called when a new *series* is shown or a folder
+// is opened, and that is what resets the view. Stepping through slices of one series therefore holds
+// the zoom the user chose, which is what a stack comparison needs.
 void CanvasWidget::fitView()
 {
     m_zoom = 1.0f;
     m_pan = QPointF(0, 0);
+    emit viewChanged();
     update();
 }
 
@@ -227,6 +257,31 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent*)
 void CanvasWidget::mouseDoubleClickEvent(QMouseEvent*)
 {
     resetView();
+}
+
+// Keyboard slice stepping (roadmap 2.1/2.5). It reuses scrollRequested, the wheel's signal, so there is
+// one navigation path and the same decode coalescing behind it. Only the canvas handles these keys, not
+// the window: typing in the window/level fields must never be stolen by a global shortcut.
+void CanvasWidget::keyPressEvent(QKeyEvent* e)
+{
+    switch (e->key()) {
+    case Qt::Key_Up:
+    case Qt::Key_PageUp:
+        emit scrollRequested(-1);
+        return;
+    case Qt::Key_Down:
+    case Qt::Key_PageDown:
+        emit scrollRequested(1);
+        return;
+    case Qt::Key_R:
+        // Reset View, same as double-click. Handled here rather than as a window-level QAction
+        // shortcut so typing "R" in the window/level fields is never intercepted (roadmap 2.1).
+        resetView();
+        return;
+    default:
+        break;
+    }
+    QOpenGLWidget::keyPressEvent(e);
 }
 
 void CanvasWidget::wheelEvent(QWheelEvent* e)
