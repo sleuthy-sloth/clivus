@@ -19,6 +19,7 @@ public:
 
     void setFrame(clivus::ImageFrame frame);   // resets window to the full dynamic range
     void resetView();
+    void fitView();   // zoom back to 1.0 (already fit to the viewport), keep pan and window
     void setWindowLevel(double center, double width);
 
 signals:

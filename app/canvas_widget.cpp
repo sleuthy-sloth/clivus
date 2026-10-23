@@ -59,6 +59,16 @@ void CanvasWidget::resetView()
     update();
 }
 
+// "Fit" is the state setFrame() starts from: the image is always drawn to fit the viewport before
+// zoom is applied, so fitting is just zoom back to 1.0 (and re-centre), without touching the
+// window/level the user may have set.
+void CanvasWidget::fitView()
+{
+    m_zoom = 1.0f;
+    m_pan = QPointF(0, 0);
+    update();
+}
+
 void CanvasWidget::setWindowLevel(double center, double width)
 {
     m_center = center;

@@ -15,6 +15,7 @@ class QLabel;
 class QListWidget;
 class QProgressBar;
 class QPushButton;
+class QSplitter;
 class QTimer;
 
 class MainWindow : public QMainWindow {
@@ -55,6 +56,7 @@ private:
     void setIdleProgress();
 
     QListWidget* m_seriesList = nullptr;
+    QSplitter* m_splitter = nullptr;
     CanvasWidget* m_canvas = nullptr;
     QLabel* m_status = nullptr;
     QProgressBar* m_progress = nullptr;

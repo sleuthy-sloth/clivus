@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "main_window.h"
 
+#include "clivus/version.h"
+
 #include <QAction>
 #include <QDir>
 #include <QFileDialog>
@@ -14,6 +16,7 @@
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QToolBar>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtConcurrent/QtConcurrentRun>
@@ -22,6 +25,7 @@
 #include <cstdio>
 
 #include "canvas_widget.h"
+#include "style.h"
 
 namespace {
 
@@ -73,12 +77,12 @@ MainWindow::MainWindow(QWidget* parent)
     m_seriesList->setUniformItemSizes(false);
     m_canvas = new CanvasWidget(this);
 
-    auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->addWidget(m_seriesList);
-    splitter->addWidget(m_canvas);
-    splitter->setStretchFactor(1, 1);
-    splitter->setSizes({320, 900});
-    setCentralWidget(splitter);
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_splitter->addWidget(m_seriesList);
+    m_splitter->addWidget(m_canvas);
+    m_splitter->setStretchFactor(1, 1);
+    m_splitter->setSizes({320, 900});
+    setCentralWidget(m_splitter);
 
     m_status = new QLabel("Open a folder of DICOM files (Ctrl+O)", this);
     statusBar()->addWidget(m_status, 1);
@@ -119,15 +123,73 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_sliceWatcher, &QFutureWatcherBase::finished, this, &MainWindow::sliceFinished);
 
     auto* open = new QAction("&Open folder…", this);
+    open->setIcon(QIcon::fromTheme("folder-open"));
+    open->setToolTip("Choose a folder of DICOM files to scan");
     open->setShortcut(QKeySequence::Open);
     connect(open, &QAction::triggered, this, [this] {
         const QString dir = QFileDialog::getExistingDirectory(this, "DICOM folder");
         if (!dir.isEmpty()) openFolder(dir);
     });
-    auto* quit = new QAction("&Quit", this);
+    auto* quit = new QAction("E&xit", this);
     quit->setShortcut(QKeySequence::Quit);
     connect(quit, &QAction::triggered, this, &QWidget::close);
-    menuBar()->addMenu("&File")->addActions({open, quit});
+
+    // Menu and toolbar share one QAction per command, so a shortcut cannot drift from the button
+    // wired to the same thing (roadmap 6.3). Each action drives behaviour that already exists.
+    auto* fit = new QAction("Fit &image", this);
+    fit->setIcon(QIcon::fromTheme("zoom-fit-best"));
+    fit->setToolTip("Scale the image to fit the canvas (keeps the aspect ratio)");
+    connect(fit, &QAction::triggered, m_canvas, &CanvasWidget::fitView);
+
+    auto* reset = new QAction("&Reset view", this);
+    reset->setIcon(QIcon::fromTheme("view-refresh"));
+    reset->setToolTip("Restore default zoom, pan and window/level (double-click or R on the canvas)");
+    connect(reset, &QAction::triggered, m_canvas, &CanvasWidget::resetView);
+
+    auto* wl = new QAction("&Window/Level", this);
+    wl->setIcon(QIcon::fromTheme("contrast"));
+    wl->setToolTip("Drag with the LEFT mouse button on the canvas: horizontal = width, vertical = centre");
+    // The gesture already exists on the canvas; the action itself just points to it, so the control
+    // never pretends to be a command it is not.
+    connect(wl, &QAction::triggered, this, [this] {
+        statusBar()->showMessage("Drag with the LEFT mouse button on the canvas to adjust window/level", 4000);
+    });
+
+    auto* pan = new QAction("&Pan", this);
+    pan->setIcon(QIcon::fromTheme("transform-move"));
+    pan->setToolTip("Drag with the RIGHT mouse button on the canvas to move the image");
+    connect(pan, &QAction::triggered, this, [this] {
+        statusBar()->showMessage("Drag with the RIGHT mouse button on the canvas to pan the image", 4000);
+    });
+
+    auto* sidebar = new QAction("&Series sidebar", this);
+    sidebar->setToolTip("Show or hide the series browser");
+    sidebar->setCheckable(true);
+    sidebar->setChecked(true);
+    connect(sidebar, &QAction::toggled, this, [this](bool on) {
+        m_seriesList->setVisible(on);
+        // Give the reclaimed space to the canvas: the image is the point.
+        m_splitter->setSizes(on ? QList<int>{320, 900} : QList<int>{0, 1220});
+    });
+
+    auto* file = menuBar()->addMenu("&File");
+    file->addAction(open);
+    file->addSeparator();
+    file->addAction(quit);
+
+    auto* view = menuBar()->addMenu("&View");
+    view->addAction(fit);
+    view->addAction(reset);
+    view->addSeparator();
+    view->addAction(sidebar);
+
+    auto* toolbar = addToolBar("main");
+    toolbar->setMovable(false);
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    toolbar->setIconSize(QSize(clivus::style::kIconSize, clivus::style::kIconSize));
+    for (auto* a : {open, fit, pan, wl, reset}) toolbar->addAction(a);
+
+    setMinimumSize(720, 480);   // narrower windows clip the toolbar and sidebar
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
