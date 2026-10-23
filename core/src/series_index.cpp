@@ -545,6 +545,30 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
     out.invert = invert;
     out.frameIndex = int(want);
     out.frameCount = int(frames);
+    // Physical pixel size (PS3.3 C.7.6.3.1.1): Pixel Spacing carries [row, column] spacing in mm.
+    // Values stay on the frame; measurements decide what an unknown spacing is allowed to mean
+    // (nothing) — this only records what the header said. Read as TEXT and split, not through
+    // findAndGetFloat64Array: the RT Dose in the wild (and in this corpus) carries it as VR=UN,
+    // which the numeric accessor refuses while the values themselves are perfectly good.
+    {
+        OFString spacingText;
+        if (ds->findAndGetOFStringArray(DCM_PixelSpacing, spacingText).good() &&
+            !spacingText.empty()) {
+            const std::string text(spacingText.c_str());
+            const size_t slash = text.find('\\');
+            const auto toDouble = [](const std::string& part) {
+                try { return std::stod(part); } catch (...) { return 0.0; }
+            };
+            if (slash != std::string::npos) {
+                const double row = toDouble(text.substr(0, slash));
+                const double col = toDouble(text.substr(slash + 1));
+                if (row > 0.0 && col > 0.0) {
+                    out.pixelSpacingRow = row;
+                    out.pixelSpacingCol = col;
+                }
+            }
+        }
+    }
     return out.valid();
 }
 

@@ -266,9 +266,20 @@ MainWindow::MainWindow(QWidget* parent)
                         "drags keep working.");
     pointer->setCheckable(true);
 
+    // The measurement tool (M): its stated purpose takes over the LEFT drag while it is the
+    // active tool — one deliberate interaction change, spelled out in the hint text. Everything
+    // else (right-drag pan, wheel, keyboard) keeps behaving.
+    m_measureAction = new QAction("&Measure", this);
+    auto* measure = m_measureAction;
+    measure->setIcon(QIcon::fromTheme("applications-graphics"));
+    measure->setToolTip("Measurement tool (M) — left-drag draws distance; Shift+click three points "
+                        "for an angle (second click = vertex); right-drag still pans");
+    measure->setCheckable(true);
+    measure->setShortcut(QKeySequence("M"));   // single key like Fit's F; the noting fields never see it
+
     m_toolGroup = new QActionGroup(this);
     m_toolGroup->setExclusive(true);
-    for (auto* a : {m_windowAction, m_panAction, pointer}) {
+    for (auto* a : {m_windowAction, m_panAction, pointer, measure}) {
         a->setActionGroup(m_toolGroup);
         m_toolGroup->addAction(a);
     }
@@ -276,6 +287,7 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { setActiveTool(ActiveTool::WindowLevel); });
     connect(m_panAction, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pan); });
     connect(pointer, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Pointer); });
+    connect(measure, &QAction::triggered, this, [this] { setActiveTool(ActiveTool::Measure); });
 
     auto* sidebar = new QAction("&Series sidebar", this);
     sidebar->setToolTip("Show or hide the series browser (Ctrl+B)");
@@ -335,6 +347,12 @@ MainWindow::MainWindow(QWidget* parent)
     tools->addAction(m_windowAction);
     tools->addAction(m_panAction);
     tools->addAction(pointer);
+    tools->addAction(measure);
+
+    auto* clearMeasure = new QAction("Clear &measurements", this);
+    clearMeasure->setToolTip("Remove every drawn measurement (this slice and slice re-decodes always start clean)");
+    connect(clearMeasure, &QAction::triggered, this, [this] { m_canvas->clearMeasurements(); });
+    tools->addAction(clearMeasure);
 
     auto* help = menuBar()->addMenu("&Help");
     help->addAction(manual);
@@ -347,7 +365,7 @@ MainWindow::MainWindow(QWidget* parent)
     toolbar->setIconSize(QSize(clivus::style::kIconSize, clivus::style::kIconSize));
     for (auto* a : {open, fit}) toolbar->addAction(a);
     toolbar->addSeparator();
-    for (auto* a : {m_windowAction, m_panAction, pointer}) toolbar->addAction(a);   // exclusive tool set
+    for (auto* a : {m_windowAction, m_panAction, pointer, measure}) toolbar->addAction(a);   // exclusive tool set
     toolbar->addSeparator();
     for (auto* a : {reset}) toolbar->addAction(a);
 
@@ -545,6 +563,13 @@ void MainWindow::setActiveTool(ActiveTool tool)
         if (!m_pointerAction->isChecked()) m_pointerAction->setChecked(true);
         m_canvas->setToolHint(CanvasWidget::ToolHint::Pointer);
         hint = "Pointer tool — no adjustment highlighted; left-drag = window/level, right-drag = pan";
+        break;
+    case ActiveTool::Measure:
+        if (!m_measureAction->isChecked()) m_measureAction->setChecked(true);
+        m_canvas->setToolHint(CanvasWidget::ToolHint::Measure);
+        hint = "Measurement tool — left-drag draws a distance; Shift+click three points (second = "
+               "vertex) draws an angle. The measurement tool takes over the LEFT drag until you "
+               "switch back";
         break;
     case ActiveTool::WindowLevel:
     default:

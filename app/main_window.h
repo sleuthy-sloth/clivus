@@ -36,12 +36,15 @@ public:
     void openFolder(const QString& dir);
     void runBenchmark(int frames, int seriesRow = 0);
 
+    // The tools (and their enum) are public API: layouts and tests address the active tool.
+    enum class ActiveTool { WindowLevel, Pan, Pointer, Measure };
+    void setActiveTool(ActiveTool tool);
+
 protected:
     void closeEvent(QCloseEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;   // roadmap 3.4: Escape in the search box
 
 private:
-    enum class ActiveTool { WindowLevel, Pan, Pointer };
 
     // Whatever a worker hands back carries the request it answers, so a result that arrives after
     // the user moved on is dropped instead of shown.
@@ -74,7 +77,7 @@ private:
     void setIdleProgress();
     void showManual();
     void showAbout();
-    void setActiveTool(ActiveTool tool);   // one source of truth: toolbar, menu, cursor, hint
+private:   // one source of truth: toolbar, menu, cursor, hint
     void saveLayout();     // roadmap 3.1: geometry/splitter/sidebar/diagnostics on close
     void restoreLayout();  // roadmap 3.1: guarded restore with built-in fallbacks
     void resetLayout();    // roadmap 3.1: View ▸ Reset Layout back to the built-in default
@@ -102,6 +105,7 @@ private:
     QAction* m_windowAction = nullptr;
     QAction* m_panAction = nullptr;
     QAction* m_pointerAction = nullptr;
+    QAction* m_measureAction = nullptr;
     QAction* m_diagnosticsAction = nullptr;   // kept for layout save/restore (roadmap 3.1)
     bool m_showDiagnostics = false;   // persisted (roadmap 3.1): the toggle survives a restart
     std::vector<clivus::SeriesInfo> m_series;

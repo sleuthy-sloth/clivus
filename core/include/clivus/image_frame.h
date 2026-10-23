@@ -40,6 +40,11 @@ struct ImageFrame {
     // MONOCHROME1: the file says high stored values are displayed dark. The flip happens in
     // render(), so pixels, min/max and the window numbers stay in modality units.
     bool invert = false;
+    // Physical pixel size from the object's Pixel Spacing, in mm. Row = vertical, column =
+    // horizontal (DICOM orders Pixel Spacing as [row, column]). Zero means the header said
+    // nothing — measurements must report 'spacing unknown' rather than inventing a value.
+    double pixelSpacingRow = 0.0;
+    double pixelSpacingCol = 0.0;
 
     bool isColour() const { return channels == 3; }
 

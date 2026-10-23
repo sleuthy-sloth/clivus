@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "canvas_widget.h"
 
+#include "style.h"
+
 #include <QCursor>
 #include <QDebug>
 #include <QKeyEvent>
@@ -25,6 +27,7 @@ CanvasWidget::CanvasWidget(QWidget* parent)
 // gestures rather than pretending the inactive one is unavailable.
 void CanvasWidget::setToolHint(ToolHint hint)
 {
+    m_toolHint = hint;
     switch (hint) {
     case ToolHint::Pan:
         setCursor(Qt::OpenHandCursor);
@@ -32,6 +35,9 @@ void CanvasWidget::setToolHint(ToolHint hint)
     case ToolHint::Pointer:
         setCursor(Qt::ArrowCursor);
         break;
+    case ToolHint::Measure:
+        setCursor(Qt::CrossCursor);
+        break;   // crosshair says "measuring mode", same cursor as window/level
     case ToolHint::WindowLevel:
     default:
         setCursor(Qt::CrossCursor);
@@ -63,6 +69,15 @@ void CanvasWidget::initializeGL()
 
 void CanvasWidget::setFrame(clivus::ImageFrame frame)
 {
+    // Measurements belong to ONE slice (roadmap: measurement tools): a decode of the same frame
+    // keeps them, any other slice (or series; showSeries clears as well) drops them. The spacing
+    // comes with the frame, so a re-decoded slice re-states its own identity.
+    const bool sameSlice = frame.valid() && m_lastFrameIndex == frame.frameIndex;
+    m_lastFrameIndex = frame.frameIndex;
+    // An invalid frame (series switch) is a slice change by definition: drop the slice's output.
+    setPixelSpacing(frame.pixelSpacingRow, frame.pixelSpacingCol);
+    if (!sameSlice) clearMeasurements();
+
     m_frame = std::move(frame);
     m_frame.fullWindow(m_center, m_width);
     m_zoom = 1.0f;
@@ -71,6 +86,106 @@ void CanvasWidget::setFrame(clivus::ImageFrame frame)
     m_lastPaint = {};   // the old interval belongs to the previous image
     emit windowChanged(m_center, m_width);
     update();
+}
+
+void CanvasWidget::setPixelSpacing(double rowSpacingMm, double colSpacingMm)
+{
+    m_spacingRow = rowSpacingMm;
+    m_spacingCol = colSpacingMm;
+    update();
+}
+
+void CanvasWidget::clearMeasurements()
+{
+    m_distances.clear();
+    m_angles.clear();
+    m_measureDragging = false;
+    m_anglePending.clear();
+    update();
+}
+
+int CanvasWidget::measurementCount() const
+{
+    return int(m_distances.size() + m_angles.size());
+}
+
+QPointF CanvasWidget::mapToFrame(QPointF widget) const
+{
+    if (!m_frame.valid()) return QPointF();
+    const double W = width(), H = height();
+    const double fit = std::min(W / m_frame.width, H / m_frame.height) * m_zoom;
+    const double w = m_frame.width * fit, h = m_frame.height * fit;
+    const double x0 = (W - w) / 2.0 + m_pan.x();
+    const double y0 = (H - h) / 2.0 + m_pan.y();
+    return QPointF(double(widget.x() - x0) / fit, double(widget.y() - y0) / fit);
+}
+
+double CanvasWidget::distanceMm(QPointF p1, QPointF p2, bool& spacingKnown) const
+{
+    spacingKnown = m_spacingRow > 0.0 && m_spacingCol > 0.0;
+    if (!spacingKnown) return 0.0;
+    const QPointF f1 = mapToFrame(p1), f2 = mapToFrame(p2);
+    const double dx = (f1.x() - f2.x()) * m_spacingCol;   // columns run horizontally
+    const double dy = (f1.y() - f2.y()) * m_spacingRow;   // rows run vertically
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+double CanvasWidget::angleDeg(QPointF p1, QPointF p2, QPointF p3) const
+{
+    const QPointF v1 = mapToFrame(p1) - mapToFrame(p2);
+    const QPointF v2 = mapToFrame(p3) - mapToFrame(p2);
+    const double d1 = std::sqrt(QPointF::dotProduct(v1, v1));
+    const double d2 = std::sqrt(QPointF::dotProduct(v2, v2));
+    if (d1 == 0.0 || d2 == 0.0) return 0.0;   // degenerate segment: no angle to speak of
+    constexpr double kFullCircle = 360.0;
+    const double deg =
+        std::acos(std::clamp(QPointF::dotProduct(v1, v2) / (d1 * d2), -1.0, 1.0)) * 180.0 / M_PI;
+    return deg > 180.0 ? kFullCircle - deg : deg;
+}
+
+void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& text) const
+{
+    QFont font = p.font();
+    font.setPointSizeF(10.0);
+    p.setFont(font);
+    const QRect bounds = QFontMetrics(font).boundingRect(QRect(0, 0, 1000, 1000), 0, text);
+    const QRect r = bounds.translated(int(at.x()) + 6, int(at.y()) - bounds.height() - 6);
+    p.fillRect(r.adjusted(-3, -3, 3, 3), QColor(0, 0, 0, 160));   // backing: readable on any image
+    p.setPen(QPen(clivus::style::accent().darker(115), 1.0));
+    p.drawText(r, 0, text);
+}
+
+void CanvasWidget::drawMeasurements(QPainter& painter) const
+{
+    const QPen pen(clivus::style::accent(), 1.0);
+    painter.setPen(pen);
+    for (const DistanceMeasurement& d : m_distances) {
+        painter.drawLine(d.p1, d.p2);
+        const QPointF mid = (d.p1 + d.p2) / 2.0;
+        drawMeasurementText(painter, mid,
+                            d.spacing_known ? QString("%1 mm").arg(d.distance_mm, 0, 'f', 1)
+                                            : QString("spacing unknown"));
+    }
+    for (const AngleMeasurement& a : m_angles) {
+        painter.drawLine(a.p1, a.p2);
+        painter.drawLine(a.p2, a.p3);
+        drawMeasurementText(painter, a.p2, QString("%1\u00b0").arg(a.angle_deg, 0, 'f', 1));
+    }
+    // In-progress states: the live drag line, and gathered angle clicks waiting for the rest.
+    if (m_measureDragging) {
+        QPointF q1 = m_measureStart, q2 = m_measureEnd;
+        painter.setPen(QPen(clivus::style::accent(), 1.0, Qt::DashLine));
+        painter.drawLine(q1, q2);
+        bool known;
+        const double mm = distanceMm(q1, q2, known);
+        drawMeasurementText(painter, (q1 + q2) / 2.0,
+                            known ? QString("%1 mm").arg(mm, 0, 'f', 1) : QString("spacing unknown"));
+    }
+    if (!m_anglePending.empty()) {
+        for (const QPointF& pt : m_anglePending) painter.drawEllipse(pt, 2, 2);
+        if (m_anglePending.size() >= 2)
+            painter.drawLine(QLineF(m_anglePending[0], m_anglePending[1]));
+    }
 }
 
 void CanvasWidget::resetView()
@@ -189,12 +304,16 @@ void CanvasWidget::paintGL()
 
     // Overlays live inside paintGL so they cannot sit on top of the GL surface as child widgets and
     // intercept mouse input (roadmap 2.6). Consistent font and contrast, one call, no animations.
-    if (!m_overlayLeft.isEmpty() || !m_overlayRight.isEmpty()) {
+    // The measurement overlays always draw when present - the canvas has nothing better to show
+    // than its own measurements, with or without the corner overlay text sharing the pass.
+    if (measurementCount() > 0 || m_measureDragging || !m_anglePending.empty() ||
+        !m_overlayLeft.isEmpty() || !m_overlayRight.isEmpty()) {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
         QFont font = painter.font();
         font.setPointSizeF(10.0);
         painter.setFont(font);
+        drawMeasurements(painter);
         const QColor text(0xe6, 0xe6, 0xe6, 230);
         const QColor shadow(0, 0, 0, 160);   // enough contrast on any image, still plain
         const int pad = 8;
@@ -228,6 +347,40 @@ void CanvasWidget::paintGL()
 void CanvasWidget::mousePressEvent(QMouseEvent* e)
 {
     m_lastMouse = e->pos();
+    // Measure tool: the LEFT interaction is the measurement (the tool's stated purpose); right-drag
+    // keeps panning. A Shift+click gathers angle points; a plain left-drag starts a distance.
+    if (m_toolHint == ToolHint::Measure && e->button() == Qt::LeftButton) {
+        if (e->modifiers() & Qt::ShiftModifier) {
+            // Angle input: click sequence, vertex in the middle. A click while a distance drag is
+            // in flight just refuses (the drag owns the gesture).
+            if (m_measureDragging) return;
+            m_anglePending.push_back(QPointF(e->pos()));
+            if (m_anglePending.size() == 3) {
+                AngleMeasurement a;
+                a.p1 = m_anglePending[0];
+                a.p2 = m_anglePending[1];
+                a.p3 = m_anglePending[2];
+                // A repeated vertex (zero-length segment) is nothing to measure: drop the
+                // gathered points without committing a fake 0 degree entry. Real collinear
+                // clicks still commit: their segments have length, the angle just folds to 180.
+                const QPointF v1 = mapToFrame(a.p1) - mapToFrame(a.p2);
+                const QPointF v2 = mapToFrame(a.p3) - mapToFrame(a.p2);
+                if (QPointF::dotProduct(v1, v1) > 0.0 && QPointF::dotProduct(v2, v2) > 0.0) {
+                    a.angle_deg = angleDeg(a.p1, a.p2, a.p3);
+                    m_angles.push_back(a);
+                }
+                m_anglePending.clear();
+            }
+        } else {
+            m_anglePending.clear();   // a new distance abandons a half-typed angle
+            m_drag = Drag::Measure;
+            m_measureDragging = true;
+            m_measureStart = QPointF(e->pos());
+            m_measureEnd = m_measureStart;
+        }
+        update();
+        return;
+    }
     m_drag = (e->button() == Qt::LeftButton) ? Drag::Window : Drag::Pan;
 }
 
@@ -236,6 +389,11 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
     const QPoint d = e->pos() - m_lastMouse;
     m_lastMouse = e->pos();
 
+    if (m_drag == Drag::Measure) {
+        m_measureEnd = QPointF(e->pos());
+        update();
+        return;
+    }
     if (m_drag == Drag::Window) {
         // A colour image has no VOI transform, so there is nothing for the drag to move.
         if (m_frame.isColour()) return;
@@ -254,6 +412,23 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent*)
 {
+    if (m_drag == Drag::Measure) {
+        m_drag = Drag::None;
+        const bool meaningful = (m_measureEnd - m_measureStart).manhattanLength() >= 2;
+        bool known;
+        distanceMm(m_measureStart, m_measureEnd, known);
+        if (m_measureDragging && meaningful) {
+            DistanceMeasurement d;
+            d.p1 = m_measureStart;
+            d.p2 = m_measureEnd;
+            d.spacing_known = known;
+            d.distance_mm = distanceMm(d.p1, d.p2, known);
+            m_distances.push_back(d);
+        }
+        m_measureDragging = false;
+        update();
+        return;
+    }
     m_drag = Drag::None;
 }
 
