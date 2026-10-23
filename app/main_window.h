@@ -17,6 +17,7 @@ class QListWidget;
 class QProgressBar;
 class QPushButton;
 class QSplitter;
+class QStackedWidget;
 class QTimer;
 
 class MainWindow : public QMainWindow {
@@ -60,6 +61,8 @@ private:
 
     QListWidget* m_seriesList = nullptr;
     QSplitter* m_splitter = nullptr;
+    QStackedWidget* m_centralStack = nullptr;
+    QWidget* m_emptyState = nullptr;
     HelpWindow* m_help = nullptr;
     CanvasWidget* m_canvas = nullptr;
     QLabel* m_status = nullptr;

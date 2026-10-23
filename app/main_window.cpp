@@ -11,13 +11,15 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSplitter>
-#include <QMessageBox>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QToolBar>
+#include <QVBoxLayout>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtConcurrent/QtConcurrentRun>
@@ -100,9 +102,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_splitter->addWidget(m_canvas);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setSizes({320, 900});
-    setCentralWidget(m_splitter);
 
-    m_status = new QLabel("Open a folder of DICOM files (Ctrl+O)", this);
+    m_status = new QLabel("Ready", this);
     statusBar()->addWidget(m_status, 1);
 
     m_progress = new QProgressBar(this);
@@ -234,6 +235,45 @@ MainWindow::MainWindow(QWidget* parent)
     for (auto* a : {open, fit, pan, wl, reset}) toolbar->addAction(a);
 
     setMinimumSize(720, 480);   // narrower windows clip the toolbar and sidebar
+    // Empty state (roadmap 1.6): what Clivus does, a prominent way in, and a route to the manual.
+    // It is one page of a stack, so the main window never blocks waiting on it.
+    m_emptyState = new QWidget(this);
+    auto* emptyLayout = new QVBoxLayout(m_emptyState);
+    emptyLayout->addStretch(1);
+    auto* welcome = new QLabel("Welcome to Clivus", m_emptyState);
+    welcome->setAlignment(Qt::AlignCenter);
+    QFont heading = welcome->font();
+    heading.setPointSizeF(heading.pointSizeF() * 1.8);
+    heading.setBold(true);
+    welcome->setFont(heading);
+    auto* blurb = new QLabel(
+        "Clivus views DICOM medical image folders: scan a folder, browse its series, and examine "
+        "each slice. Intended for research and educational use.", m_emptyState);
+    blurb->setAlignment(Qt::AlignCenter);
+    blurb->setWordWrap(true);
+    auto* openButton = new QPushButton("Open Folder…", m_emptyState);
+    openButton->setToolTip("Choose a folder of DICOM files to scan (Ctrl+O)");
+    openButton->setMinimumWidth(180);
+    connect(openButton, &QPushButton::clicked, open, &QAction::trigger);
+    auto* manualLink = new QLabel(
+        QString("<a href=\"#manual\">User manual</a> (F1) explains the interface in detail"),
+        m_emptyState);
+    manualLink->setAlignment(Qt::AlignCenter);
+    connect(manualLink, &QLabel::linkActivated, this, [this] { showManual(); });
+    emptyLayout->addWidget(welcome);
+    emptyLayout->addSpacing(clivus::style::kSpacing);
+    emptyLayout->addWidget(blurb);
+    emptyLayout->addSpacing(clivus::style::kSpacing);
+    emptyLayout->addWidget(openButton, 0, Qt::AlignCenter);
+    emptyLayout->addSpacing(clivus::style::kSpacing);
+    emptyLayout->addWidget(manualLink);
+    emptyLayout->addStretch(2);
+
+    m_centralStack = new QStackedWidget(this);
+    m_centralStack->addWidget(m_emptyState);   // page 0: nothing open yet
+    m_centralStack->addWidget(m_splitter);     // page 1: folder open
+    setCentralWidget(m_centralStack);
+
 
     connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
@@ -270,6 +310,8 @@ void MainWindow::openFolder(const QString& dir)
     m_timing.clear();
     m_windowLevel.clear();
     m_canvas->setFrame(clivus::ImageFrame{});   // black, rather than the old folder's image
+    m_centralStack->setCurrentIndex(1);         // off the empty state: the folder is being opened
+    m_status->setText("Loading series…");
     startScan();
 }
 
@@ -297,7 +339,7 @@ void MainWindow::startScan()
 void MainWindow::updateScanProgress()
 {
     if (!m_scanControl) return;
-    m_status->setText(QString("Scanning %1… %2 entries")
+    m_status->setText(QString("Loading series… scanning %1 (%2 entries examined so far)")
                           .arg(QDir::toNativeSeparators(m_folder))
                           .arg(m_scanControl->examined.load(std::memory_order_relaxed)));
 }
@@ -308,7 +350,9 @@ void MainWindow::scanFinished()
     ScanResult r = m_scanWatcher->result();
     if (r.cancelled) {
         setIdleProgress();
-        m_status->setText(QString("Scan cancelled — %1").arg(QDir::toNativeSeparators(m_folder)));
+        m_status->setText(
+            QString("Scan cancelled — the folder was left unread; you can open it again or pick "
+                    "another one. The application is still usable."));
         return;
     }
 
@@ -323,8 +367,12 @@ void MainWindow::scanFinished()
 
     if (m_series.empty()) {
         setIdleProgress();
+        // Informative, not terminal: what happened, what to try, and the app is fine (roadmap 1.6).
         m_status->setText(
-            QString("No DICOM pixel data found in %1").arg(QDir::toNativeSeparators(m_folder)));
+            QString("No DICOM images were found in %1 — check that this is the right folder and "
+                    "that the files are DICOM objects with pixel data. You can open another folder "
+                    "at any time.")
+                .arg(QDir::toNativeSeparators(m_folder)));
         return;
     }
 
@@ -406,7 +454,9 @@ void MainWindow::pumpSlice()
         r.ok = clivus::loadFrame(path, r.frame, frameIndex);
         return r;
     }));
-    updateInfo("decoding…");
+    m_status->setText(QString("Loading slice %1 / %2…")
+                          .arg(m_desiredSlice + 1)
+                          .arg(m_series[size_t(m_currentSeries)].totalFrames()));
 }
 
 void MainWindow::sliceFinished()
@@ -420,7 +470,11 @@ void MainWindow::sliceFinished()
         return;
     }
     if (!r.ok) {
-        m_status->setText("Failed to decode this slice");
+        // What happened, what to try, and the app is fine: other slices and series still work.
+        m_status->setText("This slice could not be decoded — the file may be unsupported or "
+                          "damaged. Try another slice or series; the rest of the application "
+                          "remains usable.");
+        pumpSlice();
         return;
     }
     // A fast spin leaves the wheel ahead of what is being decoded; painting this one would flash a
@@ -443,11 +497,11 @@ void MainWindow::cancelLoading()
     if (m_thumbWatcher->isRunning()) m_thumbWatcher->cancel();   // queued thumbnails are dropped
     setIdleProgress();
     if (m_scanWatcher->isRunning()) {
-        m_status->setText("Cancelling — the scan stops after the object it is reading");
+        m_status->setText("Cancelling — the scan stops after the object it is currently reading; you can keep using the application meanwhile.");
         return;
     }
     if (m_series.empty()) {
-        m_status->setText("Cancelled");
+        m_status->setText("Cancelled — nothing was loaded. You can open a folder again at any time.");
         return;
     }
     updateInfo();
@@ -525,7 +579,7 @@ void MainWindow::showSeries(int index)
         m_currentSeries = -1;
         m_currentSlice = -1;
         m_desiredSlice = -1;
-        m_status->setText("This series has no objects in the index");
+        m_status->setText("This series has no image objects in the index — try another series; the application remains usable.");
         return;
     }
 
