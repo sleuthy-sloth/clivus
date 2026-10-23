@@ -88,6 +88,16 @@ Real, working, test-backed:
 The pipeline in one sentence: point it at a folder, click a series, drag the
 window, watch 60 fps.
 
+The way in, with the real logo and no study loaded — this is a screenshot of the
+actual build, not a mockup:
+
+![Clivus welcome screen: the Clivus lockup, one line about what the app is for, and the Open Folder action](docs/img/welcome-screen.png)
+
+The About panel holds the rest of the identity — version, repository, licence,
+acknowledgments and the research-use disclaimer:
+
+![Clivus About dialog: lockup, version, repository link, GPL licence note, acknowledgments and research-use disclaimer](docs/img/about-screen.png)
+
 The daily interactions — window/level drag, slice browsing, zoom and pan, and
 switching modalities with different window defaults:
 
@@ -236,6 +246,32 @@ because there is nothing to invalidate.
 They are `assert`-based, and `Release` builds define `NDEBUG`, which erases every
 check while the binary still prints "all checks passed". `core/CMakeLists.txt`
 strips `NDEBUG` for test targets — without that, the CI suite proved nothing.
+
+## Design direction: the concept boards, and what they ask for
+
+These five boards are **design targets, not screenshots of the current build.** They were drawn
+ahead of the shipped interface, so several elements in them do not exist in the code yet — treat
+them as the direction of travel, with the differences named below each one.
+
+![Concept: welcome screen with recent folders and a drop zone](docs/img/concepts/concept-welcome.png)
+*Concept welcome. Shipped today: the lockup, the one-line description and Open Folder. Not built:
+recent folders, a drag-and-drop zone with a size cap, an `Edit` menu.*
+
+![Concept: viewer with patient banner and slice-level series browser](docs/img/concepts/concept-viewer.png)
+*Concept viewer. Shipped today: series browser, window/level, slice strip, status bar. Not built:
+a patient banner, a per-slice thumbnail list, a `Measurements` menu, `Annotate`, a zoom-percentage
+control.*
+
+![Concept: window/level with presets](docs/img/concepts/concept-windowlevel.png)
+*Concept window/level. Shipped today: presets, editable centre/width, the Horos drag gesture.*
+
+![Concept: multi-frame browsing](docs/img/concepts/concept-multiframe.png)
+*Concept multi-frame browsing. Shipped today: multi-frame objects page slice by slice, RT Dose
+decodes in Gy; MPR opens as a separate three-plane window rather than in this layout.*
+
+![Concept: About screen](docs/img/concepts/concept-about.png)
+*Concept About. Shipped today: the lockup, version, repository link, licence, acknowledgments and
+the research-use disclaimer — see the real capture above.*
 
 ## Roadmap
 

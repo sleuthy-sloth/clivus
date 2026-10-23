@@ -6,8 +6,10 @@
 #include <QApplication>
 #include <QIcon>
 #include <QCommandLineParser>
+#include <QDir>
 #include <QSurfaceFormat>
 
+#include "about_dialog.h"
 #include "branding.h"
 
 #include "clivus/version.h"
@@ -47,12 +49,28 @@ int main(int argc, char** argv)
     QCommandLineParser parser;
     const QCommandLineOption bench("bench", "Render N frames headlessly and report timings.", "frames");
     parser.addOption(bench);
+    // Documentation capture: save the branded widget surfaces (welcome page, About) as PNGs from
+    // the real application, then exit. Widgets only — the GL canvas needs a real context, so a
+    // host without one still captures these truthfully instead of shipping hand-made mockups.
+    const QCommandLineOption capture("capture", "Save welcome/About PNGs to this folder and exit.", "dir");
+    parser.addOption(capture);
     parser.addPositionalArgument("folder", "DICOM folder to open", "[folder]");
     parser.process(app);
 
     MainWindow window;
     window.show();
     const QStringList args = parser.positionalArguments();
+    if (parser.isSet(capture)) {
+        const QString dir = parser.value(capture);
+        QDir().mkpath(dir);
+        QApplication::processEvents();   // let the layout settle before grabbing
+        window.grab().save(dir + QStringLiteral("/welcome-screen.png"));
+        AboutDialog about(&window);
+        about.show();
+        QApplication::processEvents();
+        about.grab().save(dir + QStringLiteral("/about-screen.png"));
+        return 0;
+    }
     if (!args.isEmpty()) window.openFolder(args.first());
     if (parser.isSet(bench)) window.runBenchmark(parser.value(bench).toInt());
     return app.exec();
