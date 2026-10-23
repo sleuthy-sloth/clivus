@@ -192,9 +192,10 @@ Two orders of magnitude under budget.
    path for every file.
 4. **32-bit multi-frame objects** hand back the whole frame stack in one buffer;
    the loader treats it as a slice stack, so every frame is browsable — frame 0
-   is no longer the only one that exists. (A documented corner: non-linear
-   Modality/VOI LUT Sequences are decoded as stored values, with no transform —
-   see `core/include/clivus/image_frame.h`; PALETTE COLOR is the same status.)
+   is no longer the only one that exists. Non-linear Modality LUT Sequences and
+   PALETTE COLOR tables are applied at decode time — what you see is the tables'
+   own output, and the window numbers describe it
+   (see `core/include/clivus/image_frame.h`).
 
 ## Volume loading
 
@@ -231,13 +232,14 @@ strips `NDEBUG` for test targets — without that, the CI suite proved nothing.
 
 - **In progress:** off-thread scan/thumbnail/slice decode with progress and
   cancel; `glTexSubImage2D` on the drag path; a full-header fallback in the scan
-  (compiled, on a branch, pending a real-GPU bench).
+  (merged; pending a real-GPU bench).
 - **Shipped since the spike:** multi-frame browsing; colour photometrics
-  (RGB/YBR_FULL, planar converted); MODALITY/IDENTITY LUT handling; RT Dose dose
-  units.
-- **Then:** PALETTE COLOR; non-linear LUT Sequences; window/level parity tests
-  against Horos; a vendored DCMTK with JPEG 2000 on macOS (bots can't decode what
-  their build lacks — today only Windows CI exercises J2K).
+  (RGB/YBR_FULL, planar converted); MODALITY LUT handling — including the
+  non-linear LUT-Sequence shape and PALETTE COLOR tables, both applied at decode
+  time with post-LUT window numbers; RT Dose dose units.
+- **Then:** window/level parity tests against a real Horos; a vendored DCMTK
+  with JPEG 2000 on macOS (bots can't decode what their build lacks — today
+  only Windows CI exercises J2K).
 - **v1:** VTK / MPR / 3D with `QVTKOpenGLNativeWidget` in the real viewer.
 - **Not planned for v1:** PACS networking, measurement tools, plugin ABI.
 - **Always out:** no AGPL code of any kind in this tree; the AGPL content that
