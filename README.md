@@ -56,7 +56,7 @@ roadmap instead of a guess.
 
 ## What Clivus does today
 
-![Clivus — the series browser, slice navigation, window/level presets and the canvas in one dark, restrained workspace](docs/img/clivus-windows.png)
+![Clivus viewing a CT slice: series browser with thumbnails, window/level fields, and the canvas — captured from the running application](docs/img/clivus-windows.png)
 
 Real, working, test-backed:
 
@@ -249,13 +249,10 @@ strips `NDEBUG` for test targets — without that, the CI suite proved nothing.
 
 ## Design direction: the concept boards, and what they ask for
 
-These five boards are **design targets, not screenshots of the current build.** They were drawn
-ahead of the shipped interface, so several elements in them do not exist in the code yet — treat
-them as the direction of travel, with the differences named below each one.
-
-![Concept: welcome screen with recent folders and a drop zone](docs/img/concepts/concept-welcome.png)
-*Concept welcome. Shipped today: the lockup, the one-line description and Open Folder. Not built:
-recent folders, a drag-and-drop zone with a size cap, an `Edit` menu.*
+These boards are **design targets, not screenshots of the current build.** They were drawn ahead of
+the shipped interface, so several elements in them do not exist in the code yet — treat them as the
+direction of travel, with the differences named below each one. (The welcome and About boards have
+since been superseded by real captures of the shipped screens, above.)
 
 ![Concept: viewer with patient banner and slice-level series browser](docs/img/concepts/concept-viewer.png)
 *Concept viewer. Shipped today: series browser, window/level, slice strip, status bar. Not built:
@@ -268,10 +265,6 @@ control.*
 ![Concept: multi-frame browsing](docs/img/concepts/concept-multiframe.png)
 *Concept multi-frame browsing. Shipped today: multi-frame objects page slice by slice, RT Dose
 decodes in Gy; MPR opens as a separate three-plane window rather than in this layout.*
-
-![Concept: About screen](docs/img/concepts/concept-about.png)
-*Concept About. Shipped today: the lockup, version, repository link, licence, acknowledgments and
-the research-use disclaimer — see the real capture above.*
 
 ## Roadmap
 
