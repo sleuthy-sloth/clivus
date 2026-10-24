@@ -51,6 +51,9 @@ public:
     QString currentSeriesUid() const;
     // Test/introspection only: the Series Instance UID the annotation sidecar is keyed by.
     std::string seriesUidForTest() const { return currentSeriesUid().toStdString(); }
+    // The row a series occupies in the browser. Not the series index: group headers and the
+    // "no matching series" placeholder can sit above the series rows.
+    int rowForSeriesIndex(int seriesIndex) const;
     // The folder epoch a batch has to carry to be accepted, and the batch entry point itself. Exposed
     // so the staleness rule can be tested without waiting on a real multi-second scan.
     quint64 folderEpochForTest() const { return m_folderEpoch; }

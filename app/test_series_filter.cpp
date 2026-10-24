@@ -25,11 +25,35 @@
 
 namespace {
 
+// Rows are grouped now: a patient header and a study header sit above their series, and neither is a
+// series the user can open. Every count here is about series rows, which are the ones that carry a
+// series index; the placeholder carries -1 and headers carry -1 as well.
 int visibleCount(const QListWidget* list)
 {
     int n = 0;
+    for (int i = 0; i < list->count(); ++i) {
+        const QListWidgetItem* item = list->item(i);
+        if (item->data(Qt::UserRole).toInt() < 0) continue;
+        if (!item->isHidden()) ++n;
+    }
+    return n;
+}
+
+int seriesRowCount(const QListWidget* list)
+{
+    int n = 0;
     for (int i = 0; i < list->count(); ++i)
-        if (!list->item(i)->isHidden()) ++n;
+        if (list->item(i)->data(Qt::UserRole).toInt() >= 0 && !list->item(i)->isHidden()) ++n;
+    return n;
+}
+
+int headerCount(const QListWidget* list)
+{
+    int n = 0;
+    for (int i = 0; i < list->count(); ++i) {
+        const int kind = list->item(i)->data(Qt::UserRole + 2).toInt();
+        if (kind != 0 && !list->item(i)->isHidden()) ++n;
+    }
     return n;
 }
 
@@ -68,15 +92,21 @@ int main(int argc, char** argv)
         QTimer::singleShot(50, &loop, &QEventLoop::quit);
         loop.exec();
     }
-    const int total = list->count();
+    const int total = visibleCount(list);   // series rows, not headers
+    CHECK(headerCount(list) > 0);           // the grouping is on screen, not just in the model
     CHECK(total > 0);
 
     QLineEdit* search = findSearchBox(w);
     CHECK(search != nullptr);
     CHECK(search->placeholderText().startsWith(QString::fromUtf8("Search series")));
 
-    // 1. A modality substring from the first row's own text filters down but keeps that row.
-    const QString firstText = list->item(0)->text();
+    // 1. A modality substring from the first *series* row's own text filters down but keeps that row.
+    // item(0) is a patient header now, so the series row has to be found rather than assumed.
+    int firstSeriesRow = -1;
+    for (int i = 0; i < list->count(); ++i)
+        if (list->item(i)->data(Qt::UserRole).toInt() >= 0) { firstSeriesRow = i; break; }
+    CHECK(firstSeriesRow >= 0);
+    const QString firstText = list->item(firstSeriesRow)->text();
     search->setText(firstText.section('\n', 1, 1).split(' ').first());   // a modality token
     CHECK(visibleCount(list) >= 1);
     CHECK(visibleCount(list) < total || firstText.section('\n', 1, 1).split(' ').first().isEmpty());
@@ -84,7 +114,8 @@ int main(int argc, char** argv)
 
     // 2. Nonsense query: exactly one placeholder row, not selectable.
     search->setText("zzz_no_such_series_zzz");
-    CHECK(visibleCount(list) == 1);
+    CHECK(visibleCount(list) == 0);   // no series survives the query
+    CHECK(headerCount(list) == 0);    // and no group header stays behind with nothing under it
     CHECK(list->item(0)->text() == QString("(no matching series)"));
     CHECK(list->item(0)->flags() == Qt::NoItemFlags);
 
@@ -121,20 +152,31 @@ int main(int argc, char** argv)
             s.modality = "CT";
             s.width = 64;
             s.height = 64;
+            // A real object, so opening one of these rows actually decodes something: a series with no
+            // files is deliberately refused by showSeries().
+            s.files.push_back((QDir(argv[1]).filePath(QStringLiteral("CT_small.dcm"))).toStdString());
+            s.frameCounts.push_back(1);
             batch.push_back(s);
         }
         search->clear();
         const quint64 epoch = w.folderEpochForTest();
         w.applyScanBatchForTest(epoch, batch);
-        CHECK(list->count() == int(batch.size()));
+        CHECK(seriesRowCount(list) == int(batch.size()));
         CHECK(visibleCount(list) == int(batch.size()));
-        CHECK(list->currentRow() == 0);   // first series selected, as a finished scan would leave it
+        CHECK(headerCount(list) > 0);   // the batch arrives grouped, not flat
+        // The first row is the patient header, so the selection lands on the first series below it.
+        CHECK(list->currentRow() > 0);
+        CHECK(list->currentItem()->data(Qt::UserRole).toInt() >= 0);
+
+        // Activating a group header opens its first series: a click on "Patient A" means "show me this".
+        list->setCurrentRow(0);
+        CHECK(!w.seriesUidForTest().empty());
 
         // A batch from a folder the user has already left must change nothing.
         std::vector<clivus::SeriesInfo> stale = batch;
         for (auto& s : stale) s.seriesDescription = "STALE";
         w.applyScanBatchForTest(epoch + 7, stale);
-        CHECK(list->count() == int(batch.size()));
+        CHECK(seriesRowCount(list) == int(batch.size()));
         CHECK(!list->item(0)->text().contains(QStringLiteral("STALE")));
 
         // Filtering still works on rows that arrived as a batch.

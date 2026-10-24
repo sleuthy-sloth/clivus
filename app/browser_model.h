@@ -4,6 +4,7 @@
 #include "clivus/series_index.h"
 
 #include <QString>
+#include <Qt>
 
 #include <string>
 #include <vector>
@@ -26,6 +27,12 @@
 // This file is deliberately widgets-free: the tree is built and filtered as plain data, which is what
 // makes it testable without a window or a GL context.
 namespace clivus::ui {
+
+// Item-data roles the browser rows use. The series index lives in Qt::UserRole, so the marks that
+// distinguish "group header" from "placeholder" sit beside it.
+inline constexpr int kHeaderRole = Qt::UserRole + 2;
+
+enum class HeaderKind { None = 0, Patient, Study };
 
 struct BrowserSeries {
     int seriesIndex = -1;   // index into the vector passed to buildBrowserTree()

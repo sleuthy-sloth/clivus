@@ -61,6 +61,7 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "browser_model.h"
 #include "canvas_widget.h"
 #include "help_window.h"
 #include "style.h"
@@ -538,7 +539,17 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_seriesList, &QListWidget::currentRowChanged, this, [this](int row) {
         if (!m_seriesList || row < 0) { showSeries(-1); return; }
         const QListWidgetItem* item = m_seriesList->item(row);
-        const int index = item ? item->data(Qt::UserRole).toInt() : row;
+        if (!item) { showSeries(-1); return; }
+        int index = item->data(Qt::UserRole).toInt();
+        if (index < 0 && !item->data(Qt::UserRole + 1).toBool()) {
+            // A group header, not the placeholder: open the first series under it. Selecting the
+            // header itself is what a click on the group means.
+            for (int i = row + 1; i < m_seriesList->count(); ++i) {
+                const int below = m_seriesList->item(i)->data(Qt::UserRole).toInt();
+                if (below >= 0) { index = below; break; }
+            }
+        }
+        if (index < 0) { showSeries(-1); return; }
         showSeries(index);
     });
     // Roadmap 3.4: keyboard navigation — arrows move currentRow (loading as it goes, since
@@ -683,7 +694,9 @@ bool MainWindow::selectSeriesForCapture(const QString& modality)
     for (size_t i = 0; i < m_series.size(); ++i) {
         if (QString::fromStdString(m_series[i].modality).compare(modality, Qt::CaseInsensitive) != 0)
             continue;
-        m_seriesList->setCurrentRow(int(i));   // the normal selection path: shows and decodes it
+        const int row = rowForSeriesIndex(int(i));
+        if (row < 0) continue;
+        m_seriesList->setCurrentRow(row);   // the normal selection path: shows and decodes it
         return true;
     }
     return false;
@@ -1168,12 +1181,38 @@ void MainWindow::rebuildSeriesRows(const QString& keepUid)
         // The blocker must NOT cover setCurrentRow below, or the new selection never reaches showSeries.
         const QSignalBlocker blocker(m_seriesList);
         m_seriesList->clear();
-        for (size_t i = 0; i < m_series.size(); ++i) {
-            auto* item = new QListWidgetItem(clivus::ui::seriesLabel(m_series[i]), m_seriesList);
-            // Deliberately not the patient name: ordinary hover tooltips stay free of identifying
-            // metadata (roadmap 1.3 / 3.5). The description and modality line is enough to pick one.
-            item->setToolTip(clivus::ui::seriesLabel(m_series[i]));
-            item->setData(Qt::UserRole, int(i));
+        // Grouped, not flat: a patient header and a study header above their series. The flat list is
+        // how two patients with identically described series became indistinguishable — the boundary
+        // between them was simply not on screen. Headers are not selectable; activating one opens its
+        // first series (see the currentRowChanged handler), because a person who clicks a group means
+        // "show me this".
+        const clivus::ui::BrowserTree tree = clivus::ui::buildBrowserTree(m_series);
+        for (const auto& patient : tree.patients) {
+            auto* header = new QListWidgetItem(patient.label, m_seriesList);
+            // Selectable on purpose: Qt will not make a non-selectable item current, so a header that
+            // could not be selected could not open its first series either. The selection handler
+            // treats the header as "show me this group".
+            header->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            header->setData(Qt::UserRole, -1);
+            header->setData(clivus::ui::kHeaderRole, int(clivus::ui::HeaderKind::Patient));
+            for (const auto& study : patient.studies) {
+                QString studyText = study.label;
+                if (study.series.size() > 1)
+                    studyText += QStringLiteral("  (%1 series)").arg(study.series.size());
+                auto* studyHeader = new QListWidgetItem("    " + studyText, m_seriesList);
+                studyHeader->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+                studyHeader->setData(Qt::UserRole, -1);
+                studyHeader->setData(clivus::ui::kHeaderRole, int(clivus::ui::HeaderKind::Study));
+                for (const auto& entry : study.series) {
+                    auto* item = new QListWidgetItem(clivus::ui::seriesLabel(m_series[size_t(entry.seriesIndex)]),
+                                                     m_seriesList);
+                    // Deliberately not the patient name: ordinary hover tooltips stay free of
+                    // identifying metadata (roadmap 1.3 / 3.5). The description and modality line is
+                    // enough to pick one.
+                    item->setToolTip(clivus::ui::seriesLabel(m_series[size_t(entry.seriesIndex)]));
+                    item->setData(Qt::UserRole, entry.seriesIndex);
+                }
+            }
         }
         applySeriesFilter();   // roadmap 3.2: a query typed before the scan finished still applies
     }
@@ -1194,10 +1233,22 @@ void MainWindow::rebuildSeriesRows(const QString& keepUid)
     if (row < 0) {
         for (int i = 0; i < m_seriesList->count(); ++i) {
             const QListWidgetItem* item = m_seriesList->item(i);
-            if (item && !item->isHidden() && !item->data(Qt::UserRole + 1).toBool()) { row = i; break; }
+            if (item && !item->isHidden() && item->data(Qt::UserRole).toInt() >= 0) { row = i; break; }
         }
     }
     if (row >= 0) m_seriesList->setCurrentRow(row);
+}
+
+int MainWindow::rowForSeriesIndex(int seriesIndex) const
+{
+    if (!m_seriesList || seriesIndex < 0) return -1;
+    for (int i = 0; i < m_seriesList->count(); ++i) {
+        const QListWidgetItem* item = m_seriesList->item(i);
+        if (!item) continue;
+        if (item->data(Qt::UserRole + 1).toBool()) continue;   // the placeholder
+        if (item->data(Qt::UserRole).toInt() == seriesIndex) return i;
+    }
+    return -1;
 }
 
 // A snapshot from a scan that is still running. Only ever grows the list: a snapshot with nothing new
@@ -1241,7 +1292,8 @@ void MainWindow::fillReadyThumbnails()
     for (int i = 0; i < count; ++i) {
         if (!future.isResultReadyAt(i)) continue;
         ++ready;
-        QListWidgetItem* item = m_seriesList->item(i);
+        // i is a series index (one thumbnail task per series), not a row.
+        QListWidgetItem* item = m_seriesList->item(rowForSeriesIndex(i));
         if (!item) continue;
         const QImage image = future.resultAt(i);
         if (image.isNull()) {
@@ -1441,8 +1493,8 @@ void MainWindow::runBenchmark(int frames, int seriesRow)
     if (frames <= 0) return;
     m_benchFrames = frames;
     m_benchRow = seriesRow;
-    if (m_seriesList->count() > 0)
-        m_seriesList->setCurrentRow(std::min(seriesRow, m_seriesList->count() - 1));
+    const int row = rowForSeriesIndex(seriesRow);
+    if (row >= 0) m_seriesList->setCurrentRow(row);
     startBenchmark();
 }
 
@@ -1507,6 +1559,7 @@ void MainWindow::applySeriesFilter()
         for (int i = 0; i < m_seriesList->count(); ++i) {
             const QListWidgetItem* item = m_seriesList->item(i);
             if (item && !item->data(Qt::UserRole + 1).toBool() &&
+                item->data(Qt::UserRole).toInt() >= 0 &&
                 item->text().contains(query, Qt::CaseInsensitive)) ++matches;
         }
     }
@@ -1522,9 +1575,55 @@ void MainWindow::applySeriesFilter()
         QListWidgetItem* item = m_seriesList->item(i);
         if (!item) continue;
         if (item->data(Qt::UserRole + 1).toBool()) { item->setHidden(!filtering); continue; }
+        if (item->data(Qt::UserRole).toInt() < 0) continue;   // group headers: decided below
         const bool match = item->text().contains(query, Qt::CaseInsensitive);
         item->setHidden(filtering && !match);
     }
+
+    // Group headers follow their children: a patient or study header is visible only when at least one
+    // series below it survived the filter. Done after the series rows so it reads the real state and
+    // cannot disagree with it.
+    {
+        int patientRow = -1;
+        int studyRow = -1;
+        bool patientHasVisible = false;
+        bool studyHasVisible = false;
+        const auto closeStudy = [&] {
+            if (studyRow >= 0 && m_seriesList->item(studyRow))
+                m_seriesList->item(studyRow)->setHidden(!studyHasVisible);
+        };
+        const auto closePatient = [&] {
+            if (patientRow >= 0 && m_seriesList->item(patientRow))
+                m_seriesList->item(patientRow)->setHidden(!patientHasVisible);
+        };
+        for (int i = 0; i < m_seriesList->count(); ++i) {
+            const QListWidgetItem* item = m_seriesList->item(i);
+            if (!item) continue;
+            const auto kind = clivus::ui::HeaderKind(item->data(clivus::ui::kHeaderRole).toInt());
+            if (kind == clivus::ui::HeaderKind::Patient) {
+                closeStudy();
+                closePatient();
+                patientRow = i;
+                studyRow = -1;
+                patientHasVisible = false;
+                studyHasVisible = false;
+                continue;
+            }
+            if (kind == clivus::ui::HeaderKind::Study) {
+                closeStudy();
+                studyRow = i;
+                studyHasVisible = false;
+                continue;
+            }
+            if (item->data(Qt::UserRole + 1).toBool()) continue;   // placeholder
+            if (item->isHidden()) continue;
+            patientHasVisible = true;
+            studyHasVisible = true;
+        }
+        closeStudy();
+        closePatient();
+    }
+
     if (filtering && matchesFound == 0) {
         auto* placeholder = new QListWidgetItem("(no matching series)");
         placeholder->setData(Qt::UserRole, -1);         // not a series: nothing to select
