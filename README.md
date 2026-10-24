@@ -58,6 +58,33 @@ roadmap instead of a guess.
 
 ![Clivus viewing a CT slice: series browser with thumbnails, window/level fields, and the canvas — captured from the running application](docs/img/clivus-windows.png)
 
+*Captured from the running application (macOS runner, committed synthetic corpus), not drawn.*
+
+**Measure, and keep the measurement.** Rectangle and ellipse regions report mean, standard
+deviation, min, max and mm² area; they are saved per series and slice, and export to CSV. The
+statistics below come from the pixels under the shape, not from a formula in the UI:
+
+![A rectangle ROI over a CT slice showing mean, SD, min, max and area in mm²](docs/img/viewer-roi.png)
+
+**Reformats, with the choice stated.** Nearest-neighbour invents nothing; linear blends between
+adjacent slices; MIP and MinIP project a slab of a stated thickness. The dialog always says which
+is in use, and keeps the research/experimental label:
+
+![The MPR dialog with axial, coronal and sagittal planes, a Reformat row set to linear interpolation and a 5 mm MIP, and the label saying so](docs/img/mpr.png)
+
+*This one is a generated phantom: the committed corpus holds a single 128×128 CT object, so a
+coronal reformat of it is one pixel tall. `tools/make_phantom.py` writes a 64-slice synthetic stack
+(Hounsfield-like values, every identifying field `SYNTHETIC`) and the screenshot is the real
+application reformatting it. Real output, synthetic data — never a drawing of a feature.*
+
+**Studies that live on a server.** Any DICOMweb service (QIDO-RS search, WADO-RS retrieval) can be
+searched from inside the app; a study downloads into its own cache folder and then opens like a
+local one:
+
+![The Open from DICOMweb server dialog: URL, optional Authorization header, filters, results table with Patient, Study date, Modality, Description and Instances columns](docs/img/server-dialog.png)
+
+*The dialog in its empty state — no server contacted, no patient data in the picture.*
+
 Real, working, test-backed:
 
 - **Browse a folder like a study** — series list with thumbnails and metadata lines
