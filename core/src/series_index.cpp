@@ -308,13 +308,108 @@ constexpr const char* kQuarantineSeriesUid = "quarantine";
 
 struct Group {
     SeriesInfo info;
-    std::vector<FileRecord> records;
+    std::vector<const FileRecord*> records;
 };
+
+// How many objects are parsed between progress snapshots. Small enough that a big folder starts
+// showing series quickly, large enough that the regrouping below is noise next to the file reads.
+constexpr size_t kProgressInterval = 64;
+
+// Turns the objects parsed so far into series. Called once at the end, and again at intervals while
+// the walk is still running so the browser can show what it has instead of nothing.
+// Records are read, never consumed, which is what makes repeated calls possible.
+std::vector<SeriesInfo> buildSeries(const std::vector<FileRecord>& records,
+                                    ScanDiagnostics* diagnostics = nullptr)
+{
+    std::vector<SeriesInfo> out;
+
+    std::vector<const FileRecord*> ordered;
+    ordered.reserve(records.size());
+    for (const FileRecord& r : records) ordered.push_back(&r);
+    std::sort(ordered.begin(), ordered.end(), [](const FileRecord* a, const FileRecord* b) {
+        if (a->studyUid != b->studyUid) return a->studyUid < b->studyUid;
+        if (a->seriesUid != b->seriesUid) return a->seriesUid < b->seriesUid;
+        return a->path < b->path;
+    });
+
+    std::map<GroupKey, Group> groups;
+    std::map<std::string, const FileRecord*> firstIdentity;   // series UID -> first object seen
+    int splitIndex = 0;                                      // names split groups in scan order, so a
+                                                             // rescan produces the same names
+
+    for (const FileRecord* rp : ordered) {
+        const FileRecord& r = *rp;
+        GroupKey key{r.studyUid, r.seriesUid, std::string()};
+        if (r.seriesUid.empty()) {
+            key.studyUid.clear();
+            key.seriesUid = kQuarantineSeriesUid;
+            if (diagnostics) ++diagnostics->quarantinedObjects;
+        } else {
+            const auto first = firstIdentity.find(r.seriesUid);
+            if (first == firstIdentity.end()) {
+                firstIdentity.emplace(r.seriesUid, rp);
+            } else if (identityDiffers(*first->second, r)) {
+                // Same series UID, different patient identity: a separate group, and a count so the
+                // caller can report it instead of the rows quietly merging.
+                key.identity = patientKey(r);
+                if (groups.find(key) == groups.end() && diagnostics) ++diagnostics->conflictSplits;
+            }
+        }
+
+        Group& g = groups[key];
+        if (g.records.empty()) {
+            g.info.seriesUid = r.seriesUid;
+            g.info.studyUid = r.studyUid;
+            g.info.modality = r.modality;
+            g.info.patientName = r.patientName;
+            g.info.patientId = r.patientId;
+            g.info.studyDescription = r.studyDescription;
+            g.info.seriesDescription = r.seriesDescription;
+            g.info.width = r.width;
+            g.info.height = r.height;
+            g.info.quarantined = r.seriesUid.empty();
+            // A split group cannot keep the shared UID: the cache and the UI both address a series by
+            // (study, series), so two groups under one pair would overwrite each other.
+            if (!key.identity.empty())
+                g.info.seriesUid += "#split" + std::to_string(++splitIndex);
+        }
+        g.records.push_back(rp);
+    }
+
+    out.reserve(groups.size());
+    for (auto& [key, g] : groups) {
+        // The sort key carries the frame count, so files and frameCounts come out of one sort and
+        // cannot drift apart.
+        std::stable_sort(g.records.begin(), g.records.end(),
+                         [](const FileRecord* a, const FileRecord* b) {
+                             if (a->instance != b->instance) return a->instance < b->instance;
+                             return a->path < b->path;
+                         });
+        SeriesInfo s = std::move(g.info);
+        for (const FileRecord* r : g.records) {
+            s.files.push_back(r->path);
+            s.frameCounts.push_back(r->frames);
+            s.sliceGeometry.push_back(r->geometry);
+        }
+        out.push_back(std::move(s));
+    }
+    std::sort(out.begin(), out.end(), [](const SeriesInfo& a, const SeriesInfo& b) {
+        // The quarantine group goes last: objects with no series identity are worth showing, but they
+        // are not a study and must not lead the list a person reads.
+        if (a.quarantined != b.quarantined) return !a.quarantined;
+        if (a.studyDescription != b.studyDescription) return a.studyDescription < b.studyDescription;
+        // Series UID last keeps the order total (split groups carry their own #splitN suffix). The
+        // display ordering itself is the browser's job, not the scan's: changing it here reorders
+        // every caller's list, which is not this change's business.
+        return a.seriesUid < b.seriesUid;
+    });
+    return out;
+}
 
 }  // namespace
 
 std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control,
-                                      ScanDiagnostics* diagnostics)
+                                      ScanDiagnostics* diagnostics, const ScanProgress& progress)
 {
     registerCodecs();
     if (diagnostics) *diagnostics = ScanDiagnostics{};
@@ -372,89 +467,14 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         r.height = int(rows);
         records.push_back(std::move(r));
         it.increment(ec);
+        // Mid-walk snapshot: the browser can show what has been found so far instead of an empty pane
+        // for the whole walk. Cheap relative to the file reads it sits between, and the last call
+        // below is the one that counts.
+        if (progress && records.size() % kProgressInterval == 0) progress(buildSeries(records));
     }
 
-    std::sort(records.begin(), records.end(), [](const FileRecord& a, const FileRecord& b) {
-        if (a.studyUid != b.studyUid) return a.studyUid < b.studyUid;
-        if (a.seriesUid != b.seriesUid) return a.seriesUid < b.seriesUid;
-        return a.path < b.path;
-    });
-
-    std::map<GroupKey, Group> groups;
-    std::map<std::string, FileRecord> firstIdentity;   // series UID -> first object seen under it
-    int splitIndex = 0;                                // names split groups in scan order, so a rescan
-                                                       // produces the same names
-
-    for (const FileRecord& r : records) {
-        GroupKey key{r.studyUid, r.seriesUid, std::string()};
-        if (r.seriesUid.empty()) {
-            key.studyUid.clear();
-            key.seriesUid = kQuarantineSeriesUid;
-            if (diagnostics) ++diagnostics->quarantinedObjects;
-        } else {
-            const auto first = firstIdentity.find(r.seriesUid);
-            if (first == firstIdentity.end()) {
-                firstIdentity.emplace(r.seriesUid, r);
-            } else if (identityDiffers(first->second, r)) {
-                // Same series UID, different patient identity: a separate group, and a count so the
-                // caller can report it instead of the rows quietly merging.
-                key.identity = patientKey(r);
-                if (groups.find(key) == groups.end() && diagnostics) ++diagnostics->conflictSplits;
-            }
-        }
-
-        Group& g = groups[key];
-        if (g.records.empty()) {
-            g.info.seriesUid = r.seriesUid;
-            g.info.studyUid = r.studyUid;
-            g.info.modality = r.modality;
-            g.info.patientName = r.patientName;
-            g.info.patientId = r.patientId;
-            g.info.studyDescription = r.studyDescription;
-            g.info.seriesDescription = r.seriesDescription;
-            g.info.width = r.width;
-            g.info.height = r.height;
-            g.info.quarantined = r.seriesUid.empty();
-            // A split group cannot keep the shared UID: the cache and the UI both address a series by
-            // (study, series), so two groups under one pair would overwrite each other.
-            if (!key.identity.empty())
-                g.info.seriesUid += "#split" + std::to_string(++splitIndex);
-        }
-        g.records.push_back(r);
-    }
-
-    std::vector<SeriesInfo> out;
-    out.reserve(groups.size());
-    for (auto& [key, g] : groups) {
-        // The sort key carries the frame count, so files and frameCounts come out of one sort and
-        // cannot drift apart.
-        std::stable_sort(g.records.begin(), g.records.end(),
-                         [](const FileRecord& a, const FileRecord& b) {
-                             if (a.instance != b.instance) return a.instance < b.instance;
-                             return a.path < b.path;
-                         });
-        SeriesInfo s = std::move(g.info);
-        s.files.clear();
-        s.frameCounts.clear();
-        s.sliceGeometry.clear();
-        for (auto& r : g.records) {
-            s.files.push_back(std::move(r.path));
-            s.frameCounts.push_back(r.frames);
-            s.sliceGeometry.push_back(std::move(r.geometry));
-        }
-        out.push_back(std::move(s));
-    }
-    std::sort(out.begin(), out.end(), [](const SeriesInfo& a, const SeriesInfo& b) {
-        // The quarantine group goes last: objects with no series identity are worth showing, but they
-        // are not a study and must not lead the list a person reads.
-        if (a.quarantined != b.quarantined) return !a.quarantined;
-        if (a.studyDescription != b.studyDescription) return a.studyDescription < b.studyDescription;
-        // Series UID last keeps the order total (split groups carry their own #splitN suffix). The
-        // display ordering itself is the browser's job, not the scan's: changing it here reorders
-        // every caller's list, which is not this change's business.
-        return a.seriesUid < b.seriesUid;
-    });
-    return out;
+    // The final list is authoritative; any snapshot taken during the walk is superseded here.
+    return buildSeries(records, diagnostics);
 }
 
 int SeriesInfo::totalFrames() const

@@ -2,6 +2,7 @@
 #pragma once
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -85,13 +86,19 @@ struct ScanDiagnostics {
     size_t skippedNonImage = 0;     // reports and structure sets skipped without a second full read
 };
 
+// Reports the series found so far while a scan is still running, so the browser can show something
+// instead of an empty pane. Each call is a complete, self-consistent snapshot: the last one wins, and
+// callers only have to replace their list rather than diff it. Called on the worker thread.
+using ScanProgress = std::function<void(const std::vector<SeriesInfo>&)>;
+
 // Recursively scan dir for DICOM objects that carry pixel data, grouped by (StudyInstanceUID,
 // SeriesInstanceUID) and split when one series UID is shown to carry two patient identities.
 // Header-only: pixel data is not read during the scan.
 // A scan that sees control->cancel returns an empty list, so check the flag before reporting "no
 // images here" to anyone.
 std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control = nullptr,
-                                      ScanDiagnostics* diagnostics = nullptr);
+                                      ScanDiagnostics* diagnostics = nullptr,
+                                      const ScanProgress& progress = {});
 
 // Convenience: cached scan (used by the UI). Reads the index file when fresh, otherwise scans.
 std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir, ScanControl* control);

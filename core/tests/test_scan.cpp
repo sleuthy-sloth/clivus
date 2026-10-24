@@ -399,6 +399,53 @@ int main(int argc, char** argv)
         fs::remove_all(dir, ec);
     }
 
+    {   // A folder big enough to take a while reports what it has found while it is still walking, so
+        // the browser has rows to show instead of an empty pane for the whole scan.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_progress";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        bool wroteAll = true;
+        for (int s = 0; s < 7; ++s) {
+            for (int i = 0; i < 10; ++i) {
+                wroteAll = wroteAll && writeObject(
+                    dir / ("s" + std::to_string(s) + "-" + std::to_string(i) + ".dcm"),
+                    ("1.2.826.0.1.3680043.9.P" + std::to_string(s)).c_str(),
+                    ("1.2.826.0.1.3680043.9.Q" + std::to_string(s)).c_str(), "PID-A", "ALPHA^ONE",
+                    i + 1);
+            }
+        }
+        expect(wroteAll, "wrote a 70-object folder");
+
+        std::vector<size_t> progressSeries;
+        std::vector<size_t> progressFiles;
+        const auto finalSeries = clivus::scanDirectory(
+            dir.string(), nullptr, nullptr,
+            [&](const std::vector<clivus::SeriesInfo>& snapshot) {
+                size_t files = 0;
+                for (const auto& s : snapshot) files += s.files.size();
+                progressSeries.push_back(snapshot.size());
+                progressFiles.push_back(files);
+            });
+
+        expect(finalSeries.size() == 7, "the finished scan has all seven series");
+        expect(!progressSeries.empty(), "a folder larger than the interval reports progress mid-walk");
+        expect(!progressFiles.empty() && progressFiles.back() < 70,
+               "the last snapshot is a partial view, not the finished scan");
+        bool neverOvershoots = true;
+        for (size_t n : progressSeries) neverOvershoots = neverOvershoots && n <= 7;
+        expect(neverOvershoots, "a snapshot never reports more series than exist");
+
+        // Determinism: taking snapshots must not change what the scan finally returns.
+        const auto quiet = clivus::scanDirectory(dir.string());
+        expect(quiet.size() == finalSeries.size(), "snapshots do not change the final result");
+        bool same = quiet.size() == finalSeries.size();
+        for (size_t i = 0; same && i < quiet.size(); ++i)
+            same = quiet[i].seriesUid == finalSeries[i].seriesUid && quiet[i].files == finalSeries[i].files;
+        expect(same, "the final list is identical with and without a progress callback");
+        fs::remove_all(dir, ec);
+    }
+
     if (failures == 0) std::printf("scan: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }
