@@ -52,6 +52,43 @@ bool writeEmptyPixelObject(const fs::path& file)
     return ff.saveFile(file.string().c_str(), EXS_LittleEndianExplicit).good();
 }
 
+// A complete object with configurable identity, so a folder can be built that contains exactly the
+// ambiguity under test. Empty study/series/patient values are inserted as empty, and an empty
+// SeriesInstanceUID is what the quarantine path is for.
+bool writeObject(const fs::path& file, const char* study, const char* series, const char* patientId,
+                 const char* patientName, int instance, bool omitSeries = false)
+{
+    DcmFileFormat ff;
+    DcmDataset* ds = ff.getDataset();
+    ds->putAndInsertString(DCM_SOPClassUID, UID_SecondaryCaptureImageStorage);
+    ds->putAndInsertString(DCM_SOPInstanceUID,
+                           ("1.2.826.0.1.3680043.9.7." + std::to_string(instance)).c_str());
+    ds->putAndInsertString(DCM_StudyInstanceUID, study);
+    if (!omitSeries) ds->putAndInsertString(DCM_SeriesInstanceUID, series);
+    ds->putAndInsertString(DCM_PatientID, patientId);
+    ds->putAndInsertString(DCM_PatientName, patientName);
+    ds->putAndInsertString(DCM_InstanceNumber, std::to_string(instance).c_str());
+    ds->putAndInsertString(DCM_Modality, "CT");
+    ds->putAndInsertUint16(DCM_Rows, 2);
+    ds->putAndInsertUint16(DCM_Columns, 2);
+    ds->putAndInsertUint16(DCM_BitsAllocated, 16);
+    ds->putAndInsertUint16(DCM_BitsStored, 12);
+    ds->putAndInsertUint16(DCM_HighBit, 11);
+    ds->putAndInsertUint16(DCM_PixelRepresentation, 0);
+    ds->putAndInsertString(DCM_PhotometricInterpretation, "MONOCHROME2");
+    ds->putAndInsertUint16(DCM_SamplesPerPixel, 1);
+    const Uint16 pixels[4] = {10, 20, 30, 40};
+    ds->putAndInsertUint16Array(DCM_PixelData, pixels, 4);
+    return ff.saveFile(file.string().c_str(), EXS_LittleEndianExplicit).good();
+}
+
+const clivus::SeriesInfo* findSeries(const std::vector<clivus::SeriesInfo>& all, const char* studyUid)
+{
+    for (const auto& s : all)
+        if (s.studyUid == studyUid) return &s;
+    return nullptr;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -162,6 +199,129 @@ int main(int argc, char** argv)
         expect(sawNested, "files after a permission-denied subfolder are still indexed");
         for (const fs::path denied : {dir / "01-denied", dir / "02-denied", dir / "03-denied"}) {
             fs::permissions(denied, fs::perms::owner_all, ec);
+        }
+        fs::remove_all(dir, ec);
+    }
+
+    {   // One series UID under two study UIDs, two patients. The old grouping merged these into one
+        // row and showed the first file's patient for all of them.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_two_studies";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        expect(writeObject(dir / "a1.dcm", "1.2.826.0.1.3680043.9.A", "1.2.826.0.1.3680043.9.S",
+                           "PID-A", "ALPHA^ONE", 1), "wrote the study A object");
+        expect(writeObject(dir / "b1.dcm", "1.2.826.0.1.3680043.9.B", "1.2.826.0.1.3680043.9.S",
+                           "PID-B", "BRAVO^TWO", 1), "wrote the study B object");
+
+        clivus::ScanDiagnostics diag;
+        const auto series = clivus::scanDirectory(dir.string(), nullptr, &diag);
+        expect(series.size() == 2, "one series UID under two studies is two series, not one");
+        expect(diag.conflictSplits == 1, "the shared series UID is reported as one conflict split");
+        const auto* a = findSeries(series, "1.2.826.0.1.3680043.9.A");
+        const auto* b = findSeries(series, "1.2.826.0.1.3680043.9.B");
+        expect(a != nullptr && b != nullptr, "both studies are represented");
+        if (a) {
+            expect(a->patientId == "PID-A", "study A keeps its own patient");
+            expect(a->files.size() == 1, "study A holds exactly its own object");
+        }
+        if (b) {
+            expect(b->patientId == "PID-B", "study B keeps its own patient");
+            expect(b->files.size() == 1, "study B holds exactly its own object");
+        }
+        if (a && b) expect(a->seriesUid != b->seriesUid, "the two groups do not share a series UID");
+        fs::remove_all(dir, ec);
+    }
+
+    {   // One study, one series UID, two patient IDs. Patient identity is what splits it, and the
+        // files of each patient stay with their own patient rather than being dealt out.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_two_patients";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        expect(writeObject(dir / "p1.dcm", "1.2.826.0.1.3680043.9.C", "1.2.826.0.1.3680043.9.T",
+                           "PID-A", "ALPHA^ONE", 1), "wrote patient A slice 1");
+        expect(writeObject(dir / "p2.dcm", "1.2.826.0.1.3680043.9.C", "1.2.826.0.1.3680043.9.T",
+                           "PID-B", "BRAVO^TWO", 2), "wrote patient B slice 1");
+        expect(writeObject(dir / "p3.dcm", "1.2.826.0.1.3680043.9.C", "1.2.826.0.1.3680043.9.T",
+                           "PID-A", "ALPHA^ONE", 3), "wrote patient A slice 2");
+
+        clivus::ScanDiagnostics diag;
+        const auto series = clivus::scanDirectory(dir.string(), nullptr, &diag);
+        expect(series.size() == 2, "two patient IDs under one series UID is two series");
+        expect(diag.conflictSplits == 1, "one split is reported, not one per file");
+        int aFiles = 0, bFiles = 0;
+        for (const auto& s : series) {
+            if (s.patientId == "PID-A") aFiles += int(s.files.size());
+            if (s.patientId == "PID-B") bFiles += int(s.files.size());
+        }
+        expect(aFiles == 2, "both of patient A's objects stay together");
+        expect(bFiles == 1, "patient B's single object is its own group");
+        fs::remove_all(dir, ec);
+    }
+
+    {   // An object with no SeriesInstanceUID used to be dropped on the floor. It must be kept, in a
+        // group of its own, counted, and never folded into a series that has a UID.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_no_series";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        expect(writeObject(dir / "named.dcm", "1.2.826.0.1.3680043.9.D", "1.2.826.0.1.3680043.9.U",
+                           "PID-A", "ALPHA^ONE", 1), "wrote the object with a series UID");
+        expect(writeObject(dir / "orphan1.dcm", "1.2.826.0.1.3680043.9.D", "", "PID-A", "ALPHA^ONE",
+                           2, /*omitSeries=*/true), "wrote an object with no series UID");
+        expect(writeObject(dir / "orphan2.dcm", "1.2.826.0.1.3680043.9.D", "", "PID-A", "ALPHA^ONE",
+                           3, /*omitSeries=*/true), "wrote a second object with no series UID");
+
+        clivus::ScanDiagnostics diag;
+        const auto series = clivus::scanDirectory(dir.string(), nullptr, &diag);
+        expect(diag.quarantinedObjects == 2, "both objects without a series UID are counted");
+        expect(series.size() == 2, "the named series and the quarantine group");
+        int quarantined = 0, named = 0;
+        for (const auto& s : series) {
+            if (s.quarantined) {
+                quarantined += int(s.files.size());
+                expect(s.files.size() == 2, "both orphans share the quarantine group");
+            } else {
+                named += int(s.files.size());
+            }
+        }
+        expect(quarantined == 2, "the orphans are reachable, not dropped");
+        expect(named == 1, "the named series holds only its own object");
+        fs::remove_all(dir, ec);
+    }
+
+    {   // Determinism: grouping happens after the walk in a sorted order, so the same folder indexes
+        // the same way twice. This is what makes the cache and the conflict counters trustworthy.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_order";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        expect(writeObject(dir / "z.dcm", "1.2.826.0.1.3680043.9.E", "1.2.826.0.1.3680043.9.V",
+                           "PID-A", "ALPHA^ONE", 3), "wrote slice 3");
+        expect(writeObject(dir / "m.dcm", "1.2.826.0.1.3680043.9.E", "1.2.826.0.1.3680043.9.V",
+                           "PID-A", "ALPHA^ONE", 1), "wrote slice 1");
+        expect(writeObject(dir / "a.dcm", "1.2.826.0.1.3680043.9.E", "1.2.826.0.1.3680043.9.V",
+                           "PID-A", "ALPHA^ONE", 2), "wrote slice 2");
+
+        const auto first = clivus::scanDirectory(dir.string());
+        const auto second = clivus::scanDirectory(dir.string());
+        expect(first.size() == second.size(), "a rescan reports the same number of series");
+        bool same = first.size() == second.size();
+        for (size_t i = 0; same && i < first.size(); ++i) {
+            same = first[i].seriesUid == second[i].seriesUid &&
+                   first[i].files == second[i].files;
+        }
+        expect(same, "a rescan reports the same series in the same order with the same files");
+        if (!first.empty()) {
+            // Slices are ordered by InstanceNumber, not by the order the filesystem listed them.
+            const auto& files = first[0].files;
+            expect(files.size() == 3, "three slices in the series");
+            if (files.size() == 3) {
+                expect(files[0].find("m.dcm") != std::string::npos, "instance 1 comes first");
+                expect(files[1].find("a.dcm") != std::string::npos, "instance 2 comes second");
+                expect(files[2].find("z.dcm") != std::string::npos, "instance 3 comes third");
+            }
         }
         fs::remove_all(dir, ec);
     }

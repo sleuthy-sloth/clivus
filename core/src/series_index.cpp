@@ -181,21 +181,80 @@ SeriesInfo::SliceGeometry readSliceGeometry(DcmDataset* ds)
 
 }  // namespace
 
-std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control)
+namespace {
+
+// One parsed object, kept until the walk ends. Grouping is decided after the walk in a sorted order,
+// so which file supplies a series' metadata is no longer whatever the filesystem happened to hand
+// over first: the same folder now indexes the same way twice.
+struct FileRecord {
+    std::string path;
+    long instance = 0;
+    int frames = 1;
+    SeriesInfo::SliceGeometry geometry;
+    std::string seriesUid;
+    std::string studyUid;
+    std::string patientId;
+    std::string patientName;
+    std::string modality;
+    std::string studyDescription;
+    std::string seriesDescription;
+    int width = 0;
+    int height = 0;
+};
+
+// The identity two objects must share to belong to one series. An absent value is not evidence of a
+// different patient, so it never conflicts; only two different, present values do. PatientID is
+// compared before PatientName, because an ID that matches settles the question and a name that was
+// merely corrected should not split a series.
+bool identityDiffers(const FileRecord& a, const FileRecord& b)
+{
+    if (a.studyUid != b.studyUid) return true;
+    if (!a.patientId.empty() && !b.patientId.empty()) return a.patientId != b.patientId;
+    if (!a.patientName.empty() && !b.patientName.empty()) return a.patientName != b.patientName;
+    return false;
+}
+
+// What identifies the patient inside a split group. Only used to keep one conflicting patient's
+// files together instead of giving every file a series of its own.
+std::string patientKey(const FileRecord& r)
+{
+    if (!r.patientId.empty()) return "id:" + r.patientId;
+    if (!r.patientName.empty()) return "name:" + r.patientName;
+    return "unidentified";
+}
+
+struct GroupKey {
+    std::string studyUid;
+    std::string seriesUid;
+    std::string identity;   // empty for the first identity seen under a UID, patientKey() for a split
+    bool operator<(const GroupKey& o) const
+    {
+        if (studyUid != o.studyUid) return studyUid < o.studyUid;
+        if (seriesUid != o.seriesUid) return seriesUid < o.seriesUid;
+        return identity < o.identity;
+    }
+};
+
+// Objects with no SeriesInstanceUID are held here rather than dropped: one group per scanned root, so
+// they stay reachable and can never be mistaken for a series the sender actually named.
+constexpr const char* kQuarantineSeriesUid = "quarantine";
+
+struct Group {
+    SeriesInfo info;
+    std::vector<FileRecord> records;
+};
+
+}  // namespace
+
+std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control,
+                                      ScanDiagnostics* diagnostics)
 {
     registerCodecs();
-    std::map<std::string, SeriesInfo> bySeries;
-    // The sort key carries the frame count, so files and frameCounts come out of one sort and cannot
-    // drift apart.
-    struct Entry {
-        long instance = 0;
-        std::string path;
-        int frames = 1;
-        SeriesInfo::SliceGeometry geometry;
-    };
-    std::map<std::string, std::vector<Entry>> sortKeys;
+    if (diagnostics) *diagnostics = ScanDiagnostics{};
 
     if (control && control->cancel.load(std::memory_order_relaxed)) return {};
+
+    std::vector<FileRecord> records;
 
     std::error_code ec;
     fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
@@ -219,52 +278,104 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         if (!header) { it.increment(ec); continue; }
         DcmDataset* ds = header->getDataset();
 
-        SeriesInfo s;
+        FileRecord r;
+        r.path = p.string();
+        r.instance = instanceNumber(ds);
+        r.frames = frameCountOf(ds);
+        r.geometry = readSliceGeometry(ds);
         // anyVRString throughout: the RT Dose in the corpus carries its Series Instance UID, Modality
         // and Patient Name as VR=UN, and the escaped string the getter hands back would group it under
         // a mangled UID and show it with a blank modality.
-        s.seriesUid = anyVRString(ds, DCM_SeriesInstanceUID);
-        if (s.seriesUid.empty()) { it.increment(ec); continue; }
-        s.studyUid = anyVRString(ds, DCM_StudyInstanceUID);
-        s.modality = anyVRString(ds, DCM_Modality);
-        s.patientName = anyVRString(ds, DCM_PatientName);
-        s.studyDescription = anyVRString(ds, DCM_StudyDescription);
-        s.seriesDescription = anyVRString(ds, DCM_SeriesDescription);
+        r.seriesUid = anyVRString(ds, DCM_SeriesInstanceUID);
+        r.studyUid = anyVRString(ds, DCM_StudyInstanceUID);
+        r.modality = anyVRString(ds, DCM_Modality);
+        r.patientName = anyVRString(ds, DCM_PatientName);
+        r.patientId = anyVRString(ds, DCM_PatientID);
+        r.studyDescription = anyVRString(ds, DCM_StudyDescription);
+        r.seriesDescription = anyVRString(ds, DCM_SeriesDescription);
         Uint16 rows = 0, cols = 0;
         ds->findAndGetUint16(DCM_Rows, rows);
         ds->findAndGetUint16(DCM_Columns, cols);
-        s.width = int(cols);
-        s.height = int(rows);
-
-        auto& known = bySeries[s.seriesUid];
-        if (known.files.empty()) known = s;                       // first file wins the metadata
-        
-        // Read per-slice geometry
-        SeriesInfo::SliceGeometry geom = readSliceGeometry(ds);
-        
-        known.files.push_back(p.string());
-        sortKeys[s.seriesUid].push_back(Entry{instanceNumber(ds), p.string(), frameCountOf(ds), geom});
+        r.width = int(cols);
+        r.height = int(rows);
+        records.push_back(std::move(r));
         it.increment(ec);
     }
 
+    std::sort(records.begin(), records.end(), [](const FileRecord& a, const FileRecord& b) {
+        if (a.studyUid != b.studyUid) return a.studyUid < b.studyUid;
+        if (a.seriesUid != b.seriesUid) return a.seriesUid < b.seriesUid;
+        return a.path < b.path;
+    });
+
+    std::map<GroupKey, Group> groups;
+    std::map<std::string, FileRecord> firstIdentity;   // series UID -> first object seen under it
+    int splitIndex = 0;                                // names split groups in scan order, so a rescan
+                                                       // produces the same names
+
+    for (const FileRecord& r : records) {
+        GroupKey key{r.studyUid, r.seriesUid, std::string()};
+        if (r.seriesUid.empty()) {
+            key.studyUid.clear();
+            key.seriesUid = kQuarantineSeriesUid;
+            if (diagnostics) ++diagnostics->quarantinedObjects;
+        } else {
+            const auto first = firstIdentity.find(r.seriesUid);
+            if (first == firstIdentity.end()) {
+                firstIdentity.emplace(r.seriesUid, r);
+            } else if (identityDiffers(first->second, r)) {
+                // Same series UID, different patient identity: a separate group, and a count so the
+                // caller can report it instead of the rows quietly merging.
+                key.identity = patientKey(r);
+                if (groups.find(key) == groups.end() && diagnostics) ++diagnostics->conflictSplits;
+            }
+        }
+
+        Group& g = groups[key];
+        if (g.records.empty()) {
+            g.info.seriesUid = r.seriesUid;
+            g.info.studyUid = r.studyUid;
+            g.info.modality = r.modality;
+            g.info.patientName = r.patientName;
+            g.info.patientId = r.patientId;
+            g.info.studyDescription = r.studyDescription;
+            g.info.seriesDescription = r.seriesDescription;
+            g.info.width = r.width;
+            g.info.height = r.height;
+            g.info.quarantined = r.seriesUid.empty();
+            // A split group cannot keep the shared UID: the cache and the UI both address a series by
+            // (study, series), so two groups under one pair would overwrite each other.
+            if (!key.identity.empty())
+                g.info.seriesUid += "#split" + std::to_string(++splitIndex);
+        }
+        g.records.push_back(r);
+    }
+
     std::vector<SeriesInfo> out;
-    out.reserve(bySeries.size());
-    for (auto& [uid, s] : bySeries) {
-        auto& keys = sortKeys[uid];
-        std::stable_sort(keys.begin(), keys.end(),
-                         [](const auto& a, const auto& b) { return a.instance < b.instance; });
+    out.reserve(groups.size());
+    for (auto& [key, g] : groups) {
+        // The sort key carries the frame count, so files and frameCounts come out of one sort and
+        // cannot drift apart.
+        std::stable_sort(g.records.begin(), g.records.end(),
+                         [](const FileRecord& a, const FileRecord& b) {
+                             if (a.instance != b.instance) return a.instance < b.instance;
+                             return a.path < b.path;
+                         });
+        SeriesInfo s = std::move(g.info);
         s.files.clear();
         s.frameCounts.clear();
         s.sliceGeometry.clear();
-        for (auto& k : keys) {
-            s.files.push_back(std::move(k.path));
-            s.frameCounts.push_back(k.frames);
-            s.sliceGeometry.push_back(std::move(k.geometry));
+        for (auto& r : g.records) {
+            s.files.push_back(std::move(r.path));
+            s.frameCounts.push_back(r.frames);
+            s.sliceGeometry.push_back(std::move(r.geometry));
         }
         out.push_back(std::move(s));
     }
     std::sort(out.begin(), out.end(), [](const SeriesInfo& a, const SeriesInfo& b) {
         if (a.studyDescription != b.studyDescription) return a.studyDescription < b.studyDescription;
+        // Study before series UID: two studies that share a description used to interleave.
+        if (a.studyUid != b.studyUid) return a.studyUid < b.studyUid;
         return a.seriesUid < b.seriesUid;
     });
     return out;

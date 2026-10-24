@@ -16,7 +16,10 @@ namespace clivus {
 // invalidation.
 class IndexStore {
 public:
-    static constexpr const char* kSchemaVersion = "4";
+    // 5: series are keyed by (study_uid, series_uid) rather than series UID alone, and a series row
+    // records whether it is the quarantine group. A cache written by version 4 is dropped on open and
+    // rebuilt, which is the point of the bump: it holds rows grouped the old way.
+    static constexpr const char* kSchemaVersion = "5";
 
     ~IndexStore();
     IndexStore() = default;

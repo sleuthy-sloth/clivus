@@ -205,16 +205,19 @@ bool IndexStore::ensureSchema()
     const char* schema =
         "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);"
         // No patient_name / patient identifier column: see the cache policy note above.
-        "CREATE TABLE IF NOT EXISTS series(series_uid TEXT PRIMARY KEY, ordinal INTEGER,"
-        " study_uid TEXT, modality TEXT, study_description TEXT, series_description TEXT,"
-        " width INTEGER, height INTEGER);"
-        "CREATE TABLE IF NOT EXISTS series_file(series_uid TEXT, ordinal INTEGER, path TEXT,"
+        // Keyed by (study_uid, series_uid): the same series UID can legitimately appear under two
+        // studies in a malformed export, and keying on the UID alone let one row stand for both.
+        "CREATE TABLE IF NOT EXISTS series(study_uid TEXT, series_uid TEXT, ordinal INTEGER,"
+        " modality TEXT, study_description TEXT, series_description TEXT,"
+        " width INTEGER, height INTEGER, quarantined INTEGER,"
+        " PRIMARY KEY(study_uid, series_uid));"
+        "CREATE TABLE IF NOT EXISTS series_file(study_uid TEXT, series_uid TEXT, ordinal INTEGER, path TEXT,"
         " frames INTEGER,"
         " originX REAL, originY REAL, originZ REAL,"
         " orientRowX REAL, orientRowY REAL, orientRowZ REAL,"
         " orientColX REAL, orientColY REAL, orientColZ REAL,"
         " sliceLocation REAL, instanceNumber INTEGER, hasGeometry INTEGER);"
-        "CREATE INDEX IF NOT EXISTS series_file_uid ON series_file(series_uid, ordinal);";
+        "CREATE INDEX IF NOT EXISTS series_file_uid ON series_file(study_uid, series_uid, ordinal);";
     if (!exec(m_db, schema)) return false;
 
     // The version check happens at OPEN, not at load: a database written by an older build is
@@ -268,13 +271,14 @@ std::vector<SeriesInfo> IndexStore::load()
     if (version != kSchemaVersion || fingerprint != m_fingerprint) return out;
 
     const char* sql =
-        "SELECT s.series_uid, s.study_uid, s.modality, s.study_description,"
-        " s.series_description, s.width, s.height, f.path, f.frames,"
+        "SELECT s.study_uid, s.series_uid, s.modality, s.study_description,"
+        " s.series_description, s.width, s.height, s.quarantined, f.path, f.frames,"
         " f.originX, f.originY, f.originZ,"
         " f.orientRowX, f.orientRowY, f.orientRowZ,"
         " f.orientColX, f.orientColY, f.orientColZ,"
         " f.sliceLocation, f.instanceNumber, f.hasGeometry"
-        " FROM series s LEFT JOIN series_file f ON f.series_uid = s.series_uid"
+        " FROM series s LEFT JOIN series_file f"
+        " ON f.study_uid = s.study_uid AND f.series_uid = s.series_uid"
         " ORDER BY s.ordinal, f.ordinal;";
     sqlite3_stmt* st = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &st, nullptr) != SQLITE_OK) return out;
@@ -283,38 +287,40 @@ std::vector<SeriesInfo> IndexStore::load()
         return std::string(v ? reinterpret_cast<const char*>(v) : "");
     };
     while (sqlite3_step(st) == SQLITE_ROW) {
-        const std::string uid = text(0);
-        if (out.empty() || out.back().seriesUid != uid) {
+        const std::string study = text(0);
+        const std::string uid = text(1);
+        if (out.empty() || out.back().seriesUid != uid || out.back().studyUid != study) {
             SeriesInfo s;
+            s.studyUid = study;
             s.seriesUid = uid;
-            s.studyUid = text(1);
             s.modality = text(2);
-            // patientName stays empty: it is not cached (see the cache policy note).
+            // patientName and patientId stay empty: they are not cached (see the cache policy note).
             s.studyDescription = text(3);
             s.seriesDescription = text(4);
             s.width = sqlite3_column_int(st, 5);
             s.height = sqlite3_column_int(st, 6);
+            s.quarantined = sqlite3_column_int(st, 7) != 0;
             out.push_back(std::move(s));
         }
-        const auto* path = sqlite3_column_text(st, 7);
+        const auto* path = sqlite3_column_text(st, 8);
         if (path) {
             out.back().files.emplace_back(reinterpret_cast<const char*>(path));
-            const int frames = sqlite3_column_int(st, 8);
+            const int frames = sqlite3_column_int(st, 9);
             out.back().frameCounts.push_back(frames > 0 ? frames : 1);
 
             SeriesInfo::SliceGeometry geom;
-            geom.originX = sqlite3_column_double(st, 9);
-            geom.originY = sqlite3_column_double(st, 10);
-            geom.originZ = sqlite3_column_double(st, 11);
-            geom.orientRowX = sqlite3_column_double(st, 12);
-            geom.orientRowY = sqlite3_column_double(st, 13);
-            geom.orientRowZ = sqlite3_column_double(st, 14);
-            geom.orientColX = sqlite3_column_double(st, 15);
-            geom.orientColY = sqlite3_column_double(st, 16);
-            geom.orientColZ = sqlite3_column_double(st, 17);
-            geom.sliceLocation = sqlite3_column_double(st, 18);
-            geom.instanceNumber = sqlite3_column_int64(st, 19);
-            geom.hasGeometry = sqlite3_column_int(st, 20) != 0;
+            geom.originX = sqlite3_column_double(st, 10);
+            geom.originY = sqlite3_column_double(st, 11);
+            geom.originZ = sqlite3_column_double(st, 12);
+            geom.orientRowX = sqlite3_column_double(st, 13);
+            geom.orientRowY = sqlite3_column_double(st, 14);
+            geom.orientRowZ = sqlite3_column_double(st, 15);
+            geom.orientColX = sqlite3_column_double(st, 16);
+            geom.orientColY = sqlite3_column_double(st, 17);
+            geom.orientColZ = sqlite3_column_double(st, 18);
+            geom.sliceLocation = sqlite3_column_double(st, 19);
+            geom.instanceNumber = sqlite3_column_int64(st, 20);
+            geom.hasGeometry = sqlite3_column_int(st, 21) != 0;
             out.back().sliceGeometry.push_back(geom);
         }
     }
@@ -333,27 +339,29 @@ bool IndexStore::save(const std::vector<SeriesInfo>& series)
     sqlite3_stmt* insertFile = nullptr;
     ok = ok && sqlite3_prepare_v2(m_db,
                                   "INSERT INTO series"
-                                  " (series_uid, ordinal, study_uid, modality, study_description,"
-                                  "  series_description, width, height) VALUES(?,?,?,?,?,?,?,?)",
+                                  " (study_uid, series_uid, ordinal, modality, study_description,"
+                                  "  series_description, width, height, quarantined)"
+                                  " VALUES(?,?,?,?,?,?,?,?,?)",
                                   -1, &insertSeries, nullptr) == SQLITE_OK;
     ok = ok && sqlite3_prepare_v2(
                    m_db,
-                   "INSERT INTO series_file (series_uid, ordinal, path, frames, originX, originY,"
-                   " originZ, orientRowX, orientRowY, orientRowZ, orientColX, orientColY,"
-                   " orientColZ, sliceLocation, instanceNumber, hasGeometry)"
-                   " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   "INSERT INTO series_file (study_uid, series_uid, ordinal, path, frames,"
+                   " originX, originY, originZ, orientRowX, orientRowY, orientRowZ,"
+                   " orientColX, orientColY, orientColZ, sliceLocation, instanceNumber, hasGeometry)"
+                   " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                    -1, &insertFile, nullptr) == SQLITE_OK;
 
     for (size_t i = 0; ok && i < series.size(); ++i) {
         const SeriesInfo& s = series[i];
-        ok = bindText(insertSeries, 1, s.seriesUid) &&
-             sqlite3_bind_int(insertSeries, 2, int(i)) == SQLITE_OK &&
-             bindText(insertSeries, 3, s.studyUid) &&
+        ok = bindText(insertSeries, 1, s.studyUid) &&
+             bindText(insertSeries, 2, s.seriesUid) &&
+             sqlite3_bind_int(insertSeries, 3, int(i)) == SQLITE_OK &&
              bindText(insertSeries, 4, s.modality) &&
              bindText(insertSeries, 5, s.studyDescription) &&
              bindText(insertSeries, 6, s.seriesDescription) &&
              sqlite3_bind_int(insertSeries, 7, s.width) == SQLITE_OK &&
              sqlite3_bind_int(insertSeries, 8, s.height) == SQLITE_OK &&
+             sqlite3_bind_int(insertSeries, 9, s.quarantined ? 1 : 0) == SQLITE_OK &&
              sqlite3_step(insertSeries) == SQLITE_DONE;
         sqlite3_reset(insertSeries);
 
@@ -361,22 +369,23 @@ bool IndexStore::save(const std::vector<SeriesInfo>& series)
             const int frames = f < s.frameCounts.size() ? s.frameCounts[f] : 1;
             const SeriesInfo::SliceGeometry geom =
                 (f < s.sliceGeometry.size()) ? s.sliceGeometry[f] : SeriesInfo::SliceGeometry{};
-            ok = bindText(insertFile, 1, s.seriesUid) &&
-                 sqlite3_bind_int(insertFile, 2, int(f)) == SQLITE_OK &&
-                 bindText(insertFile, 3, s.files[f]) &&
-                 sqlite3_bind_int(insertFile, 4, frames > 0 ? frames : 1) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 5, geom.originX) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 6, geom.originY) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 7, geom.originZ) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 8, geom.orientRowX) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 9, geom.orientRowY) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 10, geom.orientRowZ) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 11, geom.orientColX) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 12, geom.orientColY) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 13, geom.orientColZ) == SQLITE_OK &&
-                 sqlite3_bind_double(insertFile, 14, geom.sliceLocation) == SQLITE_OK &&
-                 sqlite3_bind_int64(insertFile, 15, geom.instanceNumber) == SQLITE_OK &&
-                 sqlite3_bind_int(insertFile, 16, geom.hasGeometry ? 1 : 0) == SQLITE_OK &&
+            ok = bindText(insertFile, 1, s.studyUid) &&
+                 bindText(insertFile, 2, s.seriesUid) &&
+                 sqlite3_bind_int(insertFile, 3, int(f)) == SQLITE_OK &&
+                 bindText(insertFile, 4, s.files[f]) &&
+                 sqlite3_bind_int(insertFile, 5, frames > 0 ? frames : 1) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 6, geom.originX) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 7, geom.originY) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 8, geom.originZ) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 9, geom.orientRowX) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 10, geom.orientRowY) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 11, geom.orientRowZ) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 12, geom.orientColX) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 13, geom.orientColY) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 14, geom.orientColZ) == SQLITE_OK &&
+                 sqlite3_bind_double(insertFile, 15, geom.sliceLocation) == SQLITE_OK &&
+                 sqlite3_bind_int64(insertFile, 16, geom.instanceNumber) == SQLITE_OK &&
+                 sqlite3_bind_int(insertFile, 17, geom.hasGeometry ? 1 : 0) == SQLITE_OK &&
                  sqlite3_step(insertFile) == SQLITE_DONE;
             // Unconditional reset: a finished statement must leave its done state before the next
             // bind, or later binds are rejected and the step replays stale values (this is how one
