@@ -56,13 +56,16 @@ bool writeEmptyPixelObject(const fs::path& file)
 // ambiguity under test. Empty study/series/patient values are inserted as empty, and an empty
 // SeriesInstanceUID is what the quarantine path is for.
 bool writeObject(const fs::path& file, const char* study, const char* series, const char* patientId,
-                 const char* patientName, int instance, bool omitSeries = false)
+                 const char* patientName, int instance, bool omitSeries = false,
+                 const char* charset = nullptr)
 {
     DcmFileFormat ff;
     DcmDataset* ds = ff.getDataset();
     ds->putAndInsertString(DCM_SOPClassUID, UID_SecondaryCaptureImageStorage);
     ds->putAndInsertString(DCM_SOPInstanceUID,
                            ("1.2.826.0.1.3680043.9.7." + std::to_string(instance)).c_str());
+    // Declared before the text so a fixture can carry Latin-1 bytes the way an older export does.
+    if (charset) ds->putAndInsertString(DCM_SpecificCharacterSet, charset);
     ds->putAndInsertString(DCM_StudyInstanceUID, study);
     if (!omitSeries) ds->putAndInsertString(DCM_SeriesInstanceUID, series);
     ds->putAndInsertString(DCM_PatientID, patientId);
@@ -322,6 +325,32 @@ int main(int argc, char** argv)
                 expect(files[1].find("a.dcm") != std::string::npos, "instance 2 comes second");
                 expect(files[2].find("z.dcm") != std::string::npos, "instance 3 comes third");
             }
+        }
+        fs::remove_all(dir, ec);
+    }
+
+    {   // Declared text encoding. A dataset that says ISO_IR 100 carries Latin-1 bytes, and everything
+        // downstream decodes UTF-8, so the scan converts once where it reads. Without that, "Müller"
+        // arrives in the UI as "M\uFFFDller" and reads as a broken file.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_charset";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        expect(writeObject(dir / "latin1.dcm", "1.2.826.0.1.3680043.9.F", "1.2.826.0.1.3680043.9.W",
+                           "PID-A", "M\xFCller", 1, /*omitSeries=*/false, "ISO_IR 100"),
+               "wrote a Latin-1 object");
+        expect(writeObject(dir / "utf8.dcm", "1.2.826.0.1.3680043.9.G", "1.2.826.0.1.3680043.9.X",
+                           "PID-B", "M\xC3\xBCller", 1, /*omitSeries=*/false, "ISO_IR 192"),
+               "wrote a UTF-8 object");
+
+        const auto series = clivus::scanDirectory(dir.string());
+        expect(series.size() == 2, "both objects scan");
+        for (const auto& s : series) {
+            if (s.studyUid == "1.2.826.0.1.3680043.9.F")
+                expect(s.patientName == "M\xC3\xBCller",
+                       "a Latin-1 patient name is converted to UTF-8, not left as replacement bytes");
+            if (s.studyUid == "1.2.826.0.1.3680043.9.G")
+                expect(s.patientName == "M\xC3\xBCller", "a UTF-8 patient name survives unchanged");
         }
         fs::remove_all(dir, ec);
     }

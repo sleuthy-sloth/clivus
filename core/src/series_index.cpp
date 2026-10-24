@@ -4,6 +4,7 @@
 #include "clivus/codecs.h"
 
 #include <dcmtk/dcmdata/dctk.h>
+#include <dcmtk/dcmdata/dcspchrs.h>    // declared-charset text conversion
 #include <dcmtk/dcmimage/diregist.h>   // registers the colour image classes with DicomImage
 #include <dcmtk/dcmimgle/dcmimage.h>
 #include <dcmtk/dcmimgle/dimopx.h>
@@ -118,6 +119,21 @@ bool interDataToFloat(const DiMonoPixel* px, size_t offset, size_t count, std::v
     return true;
 }
 
+// A dataset states its text encoding in SpecificCharacterSet (0008,0005), and everything downstream
+// decodes bytes as UTF-8. Convert once, here, where the bytes are read: without it a dataset that
+// declares ISO_IR 100 (Latin-1) reaches the UI as U+FFFD replacement characters, so a patient or
+// series name with an accent in it reads as a broken file. Older European exports commonly declare
+// Latin-1, and the fix belongs at this one point rather than at each call site in the UI.
+// Best effort by design: when this DCMTK build has no conversion support, or the declared set cannot
+// be selected, the bytes are left exactly as they were rather than the file being refused.
+void normaliseCharacterSet(DcmDataset* ds)
+{
+    if (!ds || !ds->tagExistsWithValue(DCM_SpecificCharacterSet)) return;
+    if (!DcmSpecificCharacterSet::isConversionAvailable()) return;
+    DcmSpecificCharacterSet converter;
+    if (converter.selectCharacterSet(*ds).good()) ds->convertCharacterSet(converter);
+}
+
 // Reads one object's header, or nothing when the object has no pixel data to show. The first read
 // caps element values at 4096 bytes, which is what keeps a folder scan cheap; if it reports no Pixel
 // Data the object is read once more with no cap before being written off, because that cap is the
@@ -125,16 +141,22 @@ bool interDataToFloat(const DiMonoPixel* px, size_t offset, size_t count, std::v
 // the second read.
 std::unique_ptr<DcmFileFormat> loadHeader(const std::string& file)
 {
+    std::unique_ptr<DcmFileFormat> chosen;
+
     auto header = std::make_unique<DcmFileFormat>();
     if (header->loadFile(file.c_str(), EXS_Unknown, EGL_noChange, 4096).bad()) return nullptr;
     DcmDataset* ds = header->getDataset();
-    if (ds && ds->tagExistsWithValue(DCM_PixelData)) return header;
-
-    auto full = std::make_unique<DcmFileFormat>();
-    if (full->loadFile(file.c_str(), EXS_Unknown, EGL_noChange, 0xFFFFFFFFu).bad()) return nullptr;
-    DcmDataset* fullDs = full->getDataset();
-    if (!fullDs || !fullDs->tagExistsWithValue(DCM_PixelData)) return nullptr;
-    return full;
+    if (ds && ds->tagExistsWithValue(DCM_PixelData)) {
+        chosen = std::move(header);
+    } else {
+        auto full = std::make_unique<DcmFileFormat>();
+        if (full->loadFile(file.c_str(), EXS_Unknown, EGL_noChange, 0xFFFFFFFFu).bad()) return nullptr;
+        DcmDataset* fullDs = full->getDataset();
+        if (!fullDs || !fullDs->tagExistsWithValue(DCM_PixelData)) return nullptr;
+        chosen = std::move(full);
+    }
+    normaliseCharacterSet(chosen->getDataset());
+    return chosen;
 }
 
 // Read per-slice geometry from a dataset
