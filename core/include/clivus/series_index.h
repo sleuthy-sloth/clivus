@@ -22,8 +22,15 @@ struct SeriesInfo {
     std::string studyUid;
     std::string modality;
     std::string patientName;
+    // Patient ID is used to prove that two objects under one series UID belong to the same patient.
+    // In memory only: the index cache deliberately does not persist it (see the cache policy note in
+    // index_store.cpp), so a cached scan comes back with this empty.
+    std::string patientId;
     std::string studyDescription;
     std::string seriesDescription;
+    // True for the holding group of objects that carry no SeriesInstanceUID. They are kept and shown
+    // rather than dropped, but never merged into a series that has one.
+    bool quarantined = false;
     std::vector<std::string> files;   // sorted by InstanceNumber
     // Frames carried by each file, from NumberOfFrames; parallel to files, 1 when the tag is absent.
     // A series is browsed as one flat run of frames, so a 3-object series where one object holds 15
@@ -70,11 +77,20 @@ struct SeriesInfo {
     std::vector<double> alongDistances() const;
 };
 
-// Recursively scan dir for DICOM objects that carry pixel data, grouped by SeriesInstanceUID.
+// Counters from one scan that are worth telling the user about. Counts only: no paths, no names, no
+// identifiers, so they are safe to log or show in a status line.
+struct ScanDiagnostics {
+    size_t conflictSplits = 0;      // extra series created because one UID carried two identities
+    size_t quarantinedObjects = 0;  // objects with no SeriesInstanceUID, kept outside the real series
+};
+
+// Recursively scan dir for DICOM objects that carry pixel data, grouped by (StudyInstanceUID,
+// SeriesInstanceUID) and split when one series UID is shown to carry two patient identities.
 // Header-only: pixel data is not read during the scan.
 // A scan that sees control->cancel returns an empty list, so check the flag before reporting "no
 // images here" to anyone.
-std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control = nullptr);
+std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* control = nullptr,
+                                      ScanDiagnostics* diagnostics = nullptr);
 
 // Convenience: cached scan (used by the UI). Reads the index file when fresh, otherwise scans.
 std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir, ScanControl* control);

@@ -10,6 +10,8 @@
 #include <fstream>
 #include <string>
 
+#include <sqlite3.h>   // the schema-version test ages a cache row directly
+
 #include <cstdlib>
 
 namespace fs = std::filesystem;
@@ -152,6 +154,62 @@ int main()
         expect(loaded.size() == 1, "fileless series row survives the round trip");
         expect(!loaded.empty() && loaded[0].seriesUid == "1.2.3.3", "fileless series keeps its uid");
         expect(!loaded.empty() && loaded[0].files.empty(), "fileless series loads with an empty file list");
+    }
+
+    {   // Two series that share a series UID under different studies must stay two rows. The version 4
+        // schema keyed the series table on the UID alone, so the second row overwrote the first and a
+        // malformed export silently lost a study.
+        clivus::IndexStore store;
+        expect(store.open(dir.string()), "open before writing the shared-UID pair");
+        clivus::SeriesInfo a = makeSeries("1.2.3.shared", 512, {(dir / "a.dcm").string()});
+        a.studyUid = "1.2.3.studyA";
+        clivus::SeriesInfo b = makeSeries("1.2.3.shared", 64, {(dir / "b.dcm").string()});
+        b.studyUid = "1.2.3.studyB";
+        expect(store.save({a, b}), "save two studies that share one series UID");
+
+        clivus::IndexStore again;
+        expect(again.open(dir.string()), "reopen after the shared-UID save");
+        const auto loaded = again.load();
+        expect(loaded.size() == 2, "both studies survive: the key is (study, series), not the series UID");
+        if (loaded.size() == 2) {
+            expect(loaded[0].studyUid != loaded[1].studyUid, "the two rows keep different studies");
+            expect(loaded[0].seriesUid == loaded[1].seriesUid, "the shared UID is still the shared UID");
+            expect(loaded[0].files.size() == 1 && loaded[1].files.size() == 1,
+                   "each study keeps its own object");
+        }
+    }
+
+    {   // The quarantine flag has to survive a restart, or a cached scan would present objects with no
+        // series identity as if they were a normal series.
+        clivus::IndexStore store;
+        expect(store.open(dir.string()), "open before writing a quarantined group");
+        clivus::SeriesInfo q = makeSeries("quarantine", 32, {(dir / "a.dcm").string()});
+        q.studyUid.clear();
+        q.quarantined = true;
+        expect(store.save({q}), "save a quarantined group");
+        clivus::IndexStore again;
+        expect(again.open(dir.string()), "reopen after the quarantine save");
+        const auto loaded = again.load();
+        expect(loaded.size() == 1, "the quarantined group round-trips");
+        expect(!loaded.empty() && loaded[0].quarantined, "the quarantine flag survives the cache");
+    }
+
+    {   // A cache written by the previous schema must be a clean miss, not a partial read: version 4
+        // keyed series by UID alone, so its rows mean something different from version 5 rows.
+        const std::string path = clivus::IndexStore::cachePathFor(dir.string());
+        sqlite3* db = nullptr;
+        expect(sqlite3_open(path.c_str(), &db) == SQLITE_OK, "open the cache file to age it");
+        expect(sqlite3_exec(db, "UPDATE meta SET value='4' WHERE key='version'", nullptr, nullptr,
+                            nullptr) == SQLITE_OK, "age the schema version to 4");
+        sqlite3_close(db);
+
+        clivus::IndexStore store;
+        expect(store.open(dir.string()), "open a cache aged to version 4");
+        expect(store.load().empty(), "a version 4 cache is a miss, so the folder is rescanned");
+        expect(store.save(written), "the aged cache is rebuilt from a fresh scan");
+        clivus::IndexStore again;
+        expect(again.open(dir.string()), "reopen the rebuilt cache");
+        expect(again.load().size() == 2, "the rebuilt cache reads back");
     }
 
     // --- corrupt database: open recovers by rebuilding, and the cache is usable again
