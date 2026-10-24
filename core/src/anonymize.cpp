@@ -29,7 +29,9 @@ const DcmTagKey kRemovedTags[] = {
     DCM_PatientBirthDate,          DCM_PatientBirthTime,
     DCM_OtherPatientNames,
     DCM_PatientAddress,            DCM_PatientTelephoneNumbers,
-    DCM_PatientComments,           DCM_EthnicGroups,
+    DCM_PatientComments,           DcmTagKey(0x0010, 0x2160),   // Ethnic Group: DCMTK 3.7 calls this
+                                                                 // DCM_EthnicGroups, 3.6 only has the
+                                                                 // singular DCM_EthnicGroup
     DCM_InstitutionName,           DCM_InstitutionAddress,
     DCM_InstitutionalDepartmentName,
     DCM_ReferringPhysicianName,    DCM_PerformingPhysicianName,

@@ -40,6 +40,24 @@
         "CLIVUS_BUILD_VTK_PROBE": "ON"
       },
       "displayName": "macOS + VTK probe"
+    },
+    {
+      "name": "linux",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      },
+      "displayName": "Linux (distro Qt6 + DCMTK)"
+    },
+    {
+      "name": "linux-core",
+      "inherits": "linux",
+      "binaryDir": "${sourceDir}/build/linux-core",
+      "cacheVariables": {
+        "CLIVUS_BUILD_APP": "OFF"
+      },
+      "displayName": "Linux, core only (no Qt GUI)"
     }
   ],
   "buildPresets": [
@@ -60,6 +78,14 @@
       "name": "mac-vtk",
       "configurePreset": "mac-vtk",
       "displayName": "macOS + VTK probe"
+    },
+    {
+      "name": "linux",
+      "configurePreset": "linux"
+    },
+    {
+      "name": "linux-core",
+      "configurePreset": "linux-core"
     }
   ],
   "testPresets": [
@@ -74,6 +100,20 @@
       "name": "win",
       "configurePreset": "win",
       "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux",
+      "configurePreset": "linux",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-core",
+      "configurePreset": "linux-core",
       "output": {
         "outputOnFailure": true
       }
