@@ -57,7 +57,42 @@ $ QT_QPA_PLATFORM=offscreen ctest --test-dir build/linux --timeout 120
 Total Test time (real) =   5.41 sec
 ```
 
-## Part B, what it has to do
+## Part B — the browser shows the grouping (shipped, `734bcab`)
+
+The widget swap turned out to be the wrong unit of work, so I did the part that changes what a person
+sees without replacing `QListWidget`:
+
+- `rebuildSeriesRows()` builds **patient header → study header → series rows** from the model.
+- Headers are selectable, because Qt will not make a non-selectable item current and an unclickable
+  header that cannot open anything is decoration. Activating a header opens its first series.
+- The filter keeps headers with their children: a header shows only when a series below it survived,
+  and a no-match query hides all headers rather than leaving orphan headings.
+- `rowForSeriesIndex()` replaces three places that used a series index as a row number (thumbnails,
+  capture-series selection, benchmark). Those were latent: correct only while nothing sat above the
+  series rows.
+
+Verification:
+
+```
+$ QT_QPA_PLATFORM=offscreen ctest --test-dir build/linux --timeout 120
+100% tests passed, 0 tests failed out of 26
+Total Test time (real) =   5.70 sec
+$ ctest --test-dir build/linux-core
+100% tests passed, 0 tests failed out of 11
+Total Test time (real) =   0.75 sec
+```
+
+`series_filter` now counts series rows rather than list rows, asserts the grouping is on screen,
+asserts a header opens its first series, and asserts a no-match filter leaves no headers behind.
+
+**What this is not:** a collapsible tree. This is a grouped flat list — the boundaries are visible and
+navigable, but nothing collapses. A real tree means swapping the widget for `QTreeWidget` or a
+model/view pair, which changes every `seriesListIn()` helper in six test files and the row→series
+mapping everywhere; that is its own change, and the visible problem (patient and study boundaries)
+is solved without it.
+
+
+## Remaining: the collapsible tree
 
 1. Replace `QListWidget` with a tree view driven by this model (thumbs stay: `startThumbnails()` sets
    icons per series row, so the view needs a per-series icon role).
