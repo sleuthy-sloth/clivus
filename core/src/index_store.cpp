@@ -202,8 +202,23 @@ bool IndexStore::openDatabase(const std::string& path)
 
 bool IndexStore::ensureSchema()
 {
+    // Order matters: the meta table first, then the version decision, then the tables. The previous
+    // order created the tables and dropped them afterwards when the version disagreed, which left the
+    // database with no tables at all — the scan that followed the upgrade then failed to save, and the
+    // cache stayed empty until some later open recreated everything.
+    if (!exec(m_db, "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);")) return false;
+
+    // The version check happens at OPEN, not at load: a database written by an older build is dropped
+    // here, so rows holding fields the new schema forbids (such as patient names), or grouped by keys
+    // the new build no longer uses, do not sit on disk waiting for a scan to notice them.
+    const std::string version = readMeta(m_db, "version");
+    if (!version.empty() && version != kSchemaVersion) {
+        if (!exec(m_db, "DROP TABLE IF EXISTS series_file; DROP TABLE IF EXISTS series;"
+                        " DELETE FROM meta;"))
+            return false;
+    }
+
     const char* schema =
-        "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);"
         // No patient_name / patient identifier column: see the cache policy note above.
         // Keyed by (study_uid, series_uid): the same series UID can legitimately appear under two
         // studies in a malformed export, and keying on the UID alone let one row stand for both.
@@ -218,18 +233,7 @@ bool IndexStore::ensureSchema()
         " orientColX REAL, orientColY REAL, orientColZ REAL,"
         " sliceLocation REAL, instanceNumber INTEGER, hasGeometry INTEGER);"
         "CREATE INDEX IF NOT EXISTS series_file_uid ON series_file(study_uid, series_uid, ordinal);";
-    if (!exec(m_db, schema)) return false;
-
-    // The version check happens at OPEN, not at load: a database written by an older build is
-    // dropped here, so rows holding fields the new schema forbids (such as patient names) do not
-    // sit on disk waiting for a scan to notice them.
-    const std::string version = readMeta(m_db, "version");
-    if (!version.empty() && version != kSchemaVersion) {
-        if (!exec(m_db, "DROP TABLE IF EXISTS series_file; DROP TABLE IF EXISTS series;"
-                        " DELETE FROM meta;"))
-            return false;
-    }
-    return true;
+    return exec(m_db, schema);
 }
 
 bool IndexStore::open(const std::string& dataFolder)

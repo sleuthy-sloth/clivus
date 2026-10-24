@@ -47,7 +47,8 @@ target_link_libraries(clivus_test_volume PRIVATE clivus_core)
 add_test(NAME volume COMMAND clivus_test_volume "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/volume")
 
 add_executable(clivus_test_index_store tests/test_index_store.cpp)
-target_link_libraries(clivus_test_index_store PRIVATE clivus_core)
+# The cache-migration case ages a row directly, which needs sqlite3 in the test itself.
+target_link_libraries(clivus_test_index_store PRIVATE clivus_core SQLite::SQLite3)
 add_test(NAME index_store COMMAND clivus_test_index_store)
 
 add_executable(clivus_test_manual_search tests/test_manual_search.cpp)
