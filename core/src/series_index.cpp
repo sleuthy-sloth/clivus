@@ -373,9 +373,13 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         out.push_back(std::move(s));
     }
     std::sort(out.begin(), out.end(), [](const SeriesInfo& a, const SeriesInfo& b) {
+        // The quarantine group goes last: objects with no series identity are worth showing, but they
+        // are not a study and must not lead the list a person reads.
+        if (a.quarantined != b.quarantined) return !a.quarantined;
         if (a.studyDescription != b.studyDescription) return a.studyDescription < b.studyDescription;
-        // Study before series UID: two studies that share a description used to interleave.
-        if (a.studyUid != b.studyUid) return a.studyUid < b.studyUid;
+        // Series UID last keeps the order total (split groups carry their own #splitN suffix). The
+        // display ordering itself is the browser's job, not the scan's: changing it here reorders
+        // every caller's list, which is not this change's business.
         return a.seriesUid < b.seriesUid;
     });
     return out;
