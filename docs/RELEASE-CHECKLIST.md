@@ -1,7 +1,40 @@
 # Clivus Release Checklist
 
 A repeatable pre-release pass (roadmap §4). Tick through it for every tagged release.
-State below reflects preparation through v0.1.5 — item-by-item, with how each was checked.
+State below reflects preparation through **v0.4.0** — item-by-item, with how each was checked.
+
+## 0. v0.4.0 additions — checked, and how
+
+Every item below has a test target that fails without the change; see the matching
+`docs/UNIT-*-EVIDENCE.md` for the verbatim runs and the revert checks.
+
+- [x] Series grouped by (study, series), not by series UID alone — `scan`: one UID under two studies is
+      two series, one UID with two patient IDs splits into two, and a snapshot never merges them.
+- [x] Objects with no SeriesInstanceUID are kept and counted, not dropped — `scan` (quarantine group,
+      `ScanDiagnostics::quarantinedObjects`). The committed corpus contains two such JPEG-LS objects;
+      they were invisible before and are reachable now.
+- [x] Cache schema v5 with a composite key, and an older cache is a clean miss — `index_store` ages a
+      cache to version 4 and requires a rebuild. This also fixed a real defect: a version bump used to
+      drop the tables *after* creating them, so the first save after an upgrade failed.
+- [x] Browser shows patient and study boundaries — `series_filter` (headers present, header opens its
+      first series, a filter keeps headers with their children, a no-match filter leaves none).
+      `browser_model` covers the grouping and label rules without a window.
+- [x] Series appear while the scan is still running — `scan` (progress snapshots are partial and never
+      overshoot) and `series_filter` (a batch populates the list, a stale-epoch batch changes nothing).
+      The worker → UI hop is not exercised by a test: the corpus is smaller than the batch interval.
+- [x] Cancel keeps the series already found — code path in `scanFinished`; exercised indirectly by
+      `error_paths`. Not separately asserted.
+- [x] Zoom about the pointer, zoom/pan surviving slice steps — `canvas_view` (anchor holds through zoom
+      in and out; a slice step keeps both; a series switch resets both).
+- [x] Middle-drag scrubs slices through the coalescing path — `canvas_view` (five steps forward, five
+      back, nothing after release, left-drag still window/level).
+- [x] Overlay text contrast, label clamping, declared charset — `overlay_render` (light grey corner
+      text, no accent bleed, labels clamped at every edge) and `scan` (Latin-1 name arrives as UTF-8).
+- [x] Pixel readout claims only what the file supports — `canvas_view` (1-based row/column, frame's own
+      sample, no unit without a rescale pair) and `scan` (CT → HU, MR → none).
+- [x] Speculative decode no longer queues ahead of a requested frame — no test; a single-thread pool was
+      added beside the foreground pool. The measurement that would prove the effect (slice-step
+      latency, p95) needs a machine with a GL context and has **not** been run. Do not claim otherwise.
 
 Validation scope lives in [VALIDATION.md](VALIDATION.md): CI builds and packages Windows; nobody has
 launched the packaged exe on Windows hardware yet, and this checklist must not imply otherwise.

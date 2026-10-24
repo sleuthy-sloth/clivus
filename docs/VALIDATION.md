@@ -6,18 +6,24 @@ enforce: a green workflow is not a tested application, and nothing here claims c
 ## What is verified on every change
 
 - **Core library + CLI tools** build on Linux (aarch64, CMake/Ninja, Qt 6.12, DCMTK 3.7.1) and macOS
-  (GitHub runner, brew Qt + DCMTK) with no errors.
-- **16 test targets** run green locally (`ctest --test-dir build/rel`): image_frame, decode matrix,
-  colour/photometric, volume + MPR reslice, index_store (cache), manual_search, parity gate,
-  scan, series_filter, settings_roundtrip, error_paths, measurements, mpr, help_search,
-  series_summary.
+  (GitHub runner, brew Qt + DCMTK) with no errors. The core also builds and tests against **Debian 13
+  aarch64 with DCMTK 3.6.9**, which is what keeps the `DCMTK_VERSION` differences honest (see
+  `docs/BASELINE-2026-10-24.md`).
+- **27 test targets** run green locally (26 in the full build, plus the core-only parity gate):
+  image_frame, decode matrix, colour/photometric, volume + MPR reslice, index_store (cache),
+  manual_search, parity gate, scan, series_filter, settings_roundtrip, error_paths, measurements,
+  mpr, help_search, series_summary, annotations, cine, export, dicomweb, server_dialog, browser_model,
+  overlay_render, canvas_view.
 - **The GUI builds** on both platforms as part of those test targets (the harnesses link
   `main_window.cpp`, `canvas_widget.cpp`, and the rest), and the packaged Windows build is produced
   by `.github/workflows/windows-app.yml` (Qt deployment + bundled DCMTK DLLs + assets + licence
-  files).
+  files). That workflow is **manual-dispatch only**, so a release tag does not build Windows by
+  itself — say so in the release notes rather than implying otherwise.
 - **Real-UI screenshots** are produced by the application itself (`--capture`) on a macOS runner that
   has a window server (`.github/workflows/screenshots.yml`). That run is also the only automated
   proof that the OpenGL canvas paints real pixels — a headless Linux host cannot create a GL context.
+  Consequence worth stating: on a headless host the overlay drawing is tested by painting it into a
+  `QImage` (`overlay_render`), which proves the drawing code and not the framebuffer.
 
 ## What is *not* verified here
 
