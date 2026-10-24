@@ -59,6 +59,11 @@ public:
                    : 0;
     }
     void showSliceForTest(int delta) { showSlice(delta); }   // user-like manual step
+    // Documentation capture (main.cpp --capture): place one rectangle ROI over the middle of the
+    // displayed frame, using the same path a drag takes, and report how many pixels it covered.
+    int addRoiForCapture();
+    // Documentation capture: composite the MPR dialog for a saved review, after its volume loads.
+    bool captureMprImage(const QString& path);
     bool cineRunningForTest() const { return m_cineTimer != nullptr && m_cineTimer->isActive(); }
     void loadAnnotationsForSlice(int slice);
     void saveAnnotationsForSlice(int slice);

@@ -36,6 +36,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QApplication>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QTimer>
@@ -656,6 +657,43 @@ QPoint MainWindow::captureCanvasPosition() const
 bool MainWindow::canvasReady() const
 {
     return m_canvas != nullptr && m_canvas->hasValidFrame();
+}
+
+int MainWindow::addRoiForCapture()
+{
+    if (!m_canvas->hasValidFrame()) return 0;
+    // A drag in image space: the middle 40% of the frame, which lands on anatomy in the corpus CT.
+    // buildRoi does the statistics against the real pixels, so this is the same code path a mouse
+    // drag uses — only the pointer motion is simulated.
+    const int rows = m_canvas->frameHeightForCapture();
+    const int cols = m_canvas->frameWidthForCapture();
+    if (rows <= 0 || cols <= 0) return 0;
+    const int r0 = rows / 5, r1 = rows - rows / 5;
+    const int c0 = cols / 5, c1 = cols - cols / 5;
+    m_canvas->addRoiForCapture(r0, c0, r1, c1);
+    saveAnnotationsForSlice(m_currentSlice);
+    return int(m_canvas->rois().size());
+}
+
+bool MainWindow::captureMprImage(const QString& path)
+{
+    if (m_currentSeries < 0) return false;
+    MprView view(m_series[size_t(m_currentSeries)], this);
+    view.show();
+    QElapsedTimer clock;
+    clock.start();
+    while (!view.haveVolumeForTest() && clock.elapsed() < 30000) {
+        QApplication::processEvents(QEventLoop::AllEvents, 100);
+        QThread::msleep(100);
+    }
+    if (!view.haveVolumeForTest()) return false;
+    view.setReformatForTest(true, 1, 5.0);   // linear interpolation + MIP, so the shot shows the row
+    QApplication::processEvents();
+    QThread::msleep(500);
+    QApplication::processEvents();
+    const bool saved = view.compositeImage().save(path);
+    view.close();
+    return saved;
 }
 
 void MainWindow::toggleCine()

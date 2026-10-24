@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QImage>
 #include <QFutureWatcher>
 
 #include "clivus/image_frame.h"
@@ -38,6 +39,9 @@ public:
     // Test probe: choose reformat options through the same path the combo boxes use.
     void setReformatForTest(bool linear, int projection, double thicknessMm);
     bool haveVolumeForTest() const { return m_haveVolume; }
+    // Documentation capture: the dialog with each plane's GL framebuffer pasted in, since a widget
+    // grab leaves QOpenGLWidget surfaces empty. Returns a null image when there is nothing to show.
+    QImage compositeImage();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

@@ -9,6 +9,7 @@
 #include <QFrame>
 #include <QFutureWatcher>
 #include <QComboBox>
+#include <QPainter>
 #include <QHBoxLayout>
 #include <QSpinBox>
 #include <QLabel>
@@ -175,6 +176,21 @@ void MprView::onVolumeLoaded()
 int MprView::planeIndex(int axis) const
 {
     return (axis >= 0 && axis < int(m_planes.size())) ? m_planes[size_t(axis)].index : -1;
+}
+
+QImage MprView::compositeImage()
+{
+    QImage image = grab().toImage();
+    if (image.isNull()) return image;
+    QPainter painter(&image);
+    for (const Plane& plane : m_planes) {
+        if (plane.canvas == nullptr) continue;
+        const QImage canvas = plane.canvas->grabFramebuffer();
+        if (canvas.isNull()) continue;
+        painter.drawImage(plane.canvas->mapTo(this, QPoint(0, 0)), canvas);
+    }
+    painter.end();
+    return image;
 }
 
 void MprView::setReformatForTest(const bool linear, const int projection, const double thicknessMm)

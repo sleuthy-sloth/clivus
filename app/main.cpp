@@ -20,6 +20,8 @@
 #include "clivus/version.h"
 
 #include "main_window.h"
+
+#include "server_dialog.h"
 #include "style.h"
 
 int main(int argc, char** argv)
@@ -130,6 +132,39 @@ int main(int argc, char** argv)
                 painter.end();
             }
             if (!shot.save(dir + QStringLiteral("/viewer.png"))) return 2;
+
+            // A region of interest on the same slice, drawn by the same code the mouse uses: the
+            // README should show the measurement tools that exist now, not a picture of them.
+            if (window.addRoiForCapture() > 0) {
+                for (int i = 0; i < 10; ++i) {
+                    QApplication::processEvents(QEventLoop::AllEvents, 40);
+                    QThread::msleep(20);
+                }
+                QImage roiShot = window.grab().toImage();
+                const QImage roiCanvas = window.captureCanvasImage();
+                if (!roiCanvas.isNull() && !roiShot.isNull()) {
+                    QPainter painter(&roiShot);
+                    painter.drawImage(window.captureCanvasPosition(), roiCanvas);
+                    painter.end();
+                }
+                roiShot.save(dir + QStringLiteral("/viewer-roi.png"));
+            }
+
+            // MPR with the reformat row (linear interpolation + MIP) composited from its own
+            // framebuffers. Skipped, not faked, when the volume cannot load.
+            if (!window.captureMprImage(dir + QStringLiteral("/mpr.png")))
+                qWarning("MPR capture unavailable for this study");
+
+            // The DICOMweb dialog in its empty state: real widgets, no server contacted, no PHI.
+            {
+                ServerDialog server(&window);
+                server.show();
+                QApplication::processEvents();
+                QThread::msleep(150);
+                QApplication::processEvents();
+                server.grab().save(dir + QStringLiteral("/server-dialog.png"));
+                server.close();
+            }
         }
         return 0;
     }

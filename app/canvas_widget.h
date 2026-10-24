@@ -55,6 +55,11 @@ public:
     // Recomputes the statistics of every ROI against the frame now loaded (used after a reload and
     // after a window change does not alter modality values - only after a new frame).
     void refreshRoiStats();
+    // Documentation-capture helpers: frame extent, and one ROI built by the same code path a drag
+    // uses (no separate statistics implementation for pictures).
+    int frameWidthForCapture() const { return m_frame.width; }
+    int frameHeightForCapture() const { return m_frame.height; }
+    void addRoiForCapture(int row0, int col0, int row1, int col1);
 
     void setPixelSpacing(double rowSpacingMm, double colSpacingMm);
     void clearMeasurements();

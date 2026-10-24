@@ -217,6 +217,13 @@ bool CanvasWidget::removeLastRoi()
     return true;
 }
 
+void CanvasWidget::addRoiForCapture(const int row0, const int col0, const int row1, const int col1)
+{
+    m_rois.push_back(buildRoi(false, row0, col0, row1, col1));
+    emit roisChanged();
+    update();
+}
+
 void CanvasWidget::refreshRoiStats()
 {
     if (m_rois.empty() || !m_frame.valid()) return;
