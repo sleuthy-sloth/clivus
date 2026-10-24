@@ -84,11 +84,49 @@ Total Test time (real) =   0.70 sec
   proves the colour and the geometry, not that the result reads well at their scaling.
 - Windows and macOS builds.
 
-## 4b-2, still open
+## 4b-2 — declared text encoding (shipped, `16d9a15`)
 
-Every DICOM string is decoded with `QString::fromStdString`, which is `fromUtf8`, and nothing in the
-tree reads `SpecificCharacterSet (0008,0005)`. A dataset that declares `ISO_IR 100` (Latin-1) — common
-in older European exports — renders accented characters as `U+FFFD`. The fix belongs in the core where
-the strings are read (`anyVRString` in `core/src/series_index.cpp`), converting Latin-1, UTF-8 and
-ISO 2022 IR 100 with a documented fallback, not at each call site in the UI. It needs a fixture that
-declares ISO_IR 100 and a name with an accent, and it is large enough to be its own change.
+Every DICOM string reached the UI through `QString::fromStdString`, which is `fromUtf8`, and nothing
+read `SpecificCharacterSet (0008,0005)`. A dataset declaring `ISO_IR 100` (Latin-1) therefore showed
+`Müller` as `M?ller` — the other half of "the text looks broken", and a different defect from the pen.
+
+`loadHeader()` now converts the dataset once, where the bytes are read, via `DcmSpecificCharacterSet`:
+
+```cpp
+void normaliseCharacterSet(DcmDataset* ds)
+{
+    if (!ds || !ds->tagExistsWithValue(DCM_SpecificCharacterSet)) return;
+    if (!DcmSpecificCharacterSet::isConversionAvailable()) return;
+    DcmSpecificCharacterSet converter;
+    if (converter.selectCharacterSet(*ds).good()) ds->convertCharacterSet(converter);
+}
+```
+
+Best effort on purpose: no conversion support in the DCMTK build, or an unrecognised declared set,
+leaves the bytes untouched rather than refusing the object.
+
+Test, in `core/tests/test_scan.cpp`: one object declaring `ISO_IR 100` with Latin-1 bytes
+(`M\xFCller`) and one declaring `ISO_IR 192` with UTF-8 bytes (`M\xC3\xBCller`); both must come back
+as `M\xC3\xBCller`.
+
+Fails without the change:
+
+```
+FAIL a Latin-1 patient name is converted to UTF-8, not left as replacement bytes
+```
+
+Lanes after 4b-2:
+
+```
+$ ctest --test-dir build/linux-core
+100% tests passed, 0 tests failed out of 11
+Total Test time (real) =   0.70 sec
+
+$ QT_QPA_PLATFORM=offscreen ctest --test-dir build/linux --timeout 120
+100% tests passed, 0 tests failed out of 24
+Total Test time (real) =   5.33 sec
+```
+
+One consequence worth knowing: the same conversion does not run in `loadFrame()`, because pixel
+decoding needs no text. Anything that later reads names or descriptions straight off a file must go
+through `loadHeader()` or do the same conversion itself.
