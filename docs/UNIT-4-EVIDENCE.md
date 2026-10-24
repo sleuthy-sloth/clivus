@@ -93,13 +93,33 @@ A wrong turn worth recording: the first run of this test "passed" because the bu
 `mapToFrame` was private — and the stale binary ran. The suite looked green and proved nothing. The
 tell was `grep -c " error|FAILED"` returning nonzero next to a passing test.
 
+## Part 2b — middle-drag scrub (shipped, `c16f1d5`)
+
+Left is window/level or the measurement tool, right is pan, the wheel steps slices. The middle button
+was the one free gesture, and it is the one a workstation normally gives to scrolling.
+
+Steps are emitted through `scrollRequested` — the same signal the wheel uses — so they inherit the
+existing decode coalescing rather than opening a second path that could fight it. Movement accumulates
+in 8-pixel steps, so a slow drag still steps instead of being swallowed, and releasing resets the
+accumulator and restores the tool's cursor.
+
+No settings key was added: this is an addition, not a remapping, and it cannot collide with an existing
+gesture. Configurable mappings (swapping left and middle, say) remain open.
+
+`canvas_view` covers: five 8-px steps forward on a 40-px drag, five back on the return, no scrubbing
+after release, and left-drag still doing window/level. With the branch disabled:
+
+```
+FAIL middle-drag down steps five slices forward
+FAIL dragging back up steps the same way back
+```
+
 ## Still open in unit 4
 
-- **Canvas slice-scrub gesture.** No mouse gesture on the image changes the slice index: left drag is
-  window/level or measurement, right drag pans, the wheel steps slices. Plan calls for a middle-drag
-  or modifier-drag routed through the existing `goToSlice()` coalescing, with an explicit mapping
-  setting (needs the owner's choice of gesture, `PLAN-EXECUTION.md` §7).
-- **Configurable mouse mappings** and trackpad pixel deltas handled separately from wheel angle deltas.
+- **Configurable mouse mappings.** The plan's last item: letting a user swap which button does what.
+  Middle-drag scrub is now available, but the mapping itself is not user-configurable.
+- **Trackpad pixel deltas** handled separately from wheel angle deltas: `wheelEvent` still collapses
+  every event to one slice step.
 
 ## Not verified here
 
