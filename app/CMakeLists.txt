@@ -73,6 +73,14 @@ qt_add_executable(clivus_test_series_summary test_series_summary.cpp series_summ
 target_link_libraries(clivus_test_series_summary PRIVATE clivus_core Qt6::Gui)
 add_test(NAME series_summary COMMAND clivus_test_series_summary)
 
+# Overlay text: paints the canvas overlay code into a QImage, so contrast and label clamping are
+# checked without a GL context. Only the canvas and the palette are needed.
+qt_add_executable(clivus_test_overlay_render test_overlay_render.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_test_overlay_render PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+                                                        OpenGL::GL)
+add_test(NAME overlay_render COMMAND clivus_test_overlay_render)
+set_tests_properties(overlay_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # DICOMweb client: Qt6::Network is the only addition; the test runs a mock HTTP server in-process.
 qt_add_executable(clivus_test_dicomweb test_dicomweb.cpp dicomweb_client.cpp)
 target_link_libraries(clivus_test_dicomweb PRIVATE clivus_core Qt6::Core Qt6::Network)

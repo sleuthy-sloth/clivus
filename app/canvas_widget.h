@@ -61,6 +61,12 @@ public:
     // Export helpers: the framebuffer as displayed (window/level and zoom applied, no overlay text),
     // and the window currently in use so a series export matches what the screen shows.
     QImage captureCanvasImageForExport() { return grabFramebuffer(); }
+    // Draws every overlay (corner text, measurements, ROIs) with whatever painter it is given. The
+    // tests paint it into a QImage to check contrast and clamping without needing a GL context.
+    void paintOverlays(QPainter& painter) const;
+    // Where a measurement label lands for a given anchor (clamped into the canvas). Exposed so the
+    // clamping rule is testable without a GL context.
+    QRect measurementLabelRect(QPointF at, const QString& text) const;
     double windowCenter() const { return m_center; }
     double windowWidth() const { return m_width; }
     int frameWidthForCapture() const { return m_frame.width; }

@@ -1595,7 +1595,9 @@ void MainWindow::updateInfo(const QString& extra)
     }
     const double zoom = m_canvas->zoomFactor();
     if (zoom > 0.0) right += QString(right.isEmpty() ? "" : "   ") + QString("%1%").arg(int(zoom * 100.0));
-    if (m_showDiagnostics && !m_timing.isEmpty()) right += "\n" + m_timing;
+    // The timing line (window/paint/fps) used to be appended to the corner block, where three numbers
+    // and two units landed in the smallest text on screen next to clinical information. It is
+    // diagnostic output, so it belongs in the status bar with the rest of the state.
 
     m_canvas->setOverlay(left.join(QLatin1String("\n")), right);
 
@@ -1612,6 +1614,7 @@ void MainWindow::updateInfo(const QString& extra)
     if (zoom > 0.0 && std::abs(zoom - 1.0) > 0.001)
         status += QString(" — zoom %1%").arg(int(zoom * 100.0 + 0.5));
     if (m_currentIsColour) status += " — colour image: window/level is not applied";
+    if (m_showDiagnostics && !m_timing.isEmpty()) status += " — " + m_timing;
     m_status->setText(status);
 }
 

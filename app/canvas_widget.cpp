@@ -15,6 +15,22 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+
+// Overlay and measurement text follow the widget's own font instead of a fixed 10 pt. On a machine
+// with larger UI text, the series description and slice position were then the smallest thing on
+// screen — the opposite of what they are for. Clamped so a very large system font cannot swamp the
+// image it is drawn over.
+QFont overlayFont(const QFont& base)
+{
+    QFont font = base;
+    const double size = font.pointSizeF() > 0.0 ? font.pointSizeF() : 9.0;
+    font.setPointSizeF(std::clamp(size, 8.0, 16.0));
+    return font;
+}
+
+}  // namespace
+
 CanvasWidget::CanvasWidget(QWidget* parent)
     : QOpenGLWidget(parent)
 {
@@ -156,16 +172,56 @@ double CanvasWidget::angleDeg(QPointF p1, QPointF p2, QPointF p3) const
     return deg > 180.0 ? kFullCircle - deg : deg;
 }
 
+// Every overlay the canvas draws, in one place: corner blocks, measurements, ROIs. Called from
+// paintGL, and directly by the tests with a painter on a QImage, so the contrast and clamping rules
+// can be checked without a GL context.
+void CanvasWidget::paintOverlays(QPainter& painter) const
+{
+    painter.setFont(overlayFont(font()));
+    drawMeasurements(painter);
+    drawRois(painter);
+    // The pen is set here, not inherited. The left block used to be drawn with whatever pen the
+    // measurement pass happened to leave behind, so the series description came out in the
+    // measurement accent colour (or the ROI stroke blue) instead of light grey, and with no shadow to
+    // hold it off a bright image.
+    const QColor text(0xe6, 0xe6, 0xe6, 230);
+    const QColor shadow(0, 0, 0, 160);   // enough contrast on any image, still plain
+    const int pad = 8;
+    const auto drawCorner = [&](const QString& block, Qt::Alignment align) {
+        const QRect bounds = painter.boundingRect(
+            QRect(pad, pad, width() - 2 * pad, 200), align | Qt::TextWordWrap, block);
+        painter.setPen(shadow);
+        painter.drawText(bounds.translated(1, 1), align, block);
+        painter.setPen(text);
+        painter.drawText(bounds, align, block);
+    };
+    if (!m_overlayLeft.isEmpty()) drawCorner(m_overlayLeft, Qt::AlignLeft | Qt::AlignTop);
+    if (!m_overlayRight.isEmpty()) drawCorner(m_overlayRight, Qt::AlignRight | Qt::AlignTop);
+}
+
 void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& text) const
 {
-    QFont font = p.font();
-    font.setPointSizeF(10.0);
-    p.setFont(font);
-    const QRect bounds = QFontMetrics(font).boundingRect(QRect(0, 0, 1000, 1000), 0, text);
-    const QRect r = bounds.translated(int(at.x()) + 6, int(at.y()) - bounds.height() - 6);
+    p.setFont(overlayFont(font()));
+    const QRect r = measurementLabelRect(at, text);
     p.fillRect(r.adjusted(-3, -3, 3, 3), QColor(0, 0, 0, 160));   // backing: readable on any image
     p.setPen(QPen(clivus::style::accent().darker(115), 1.0));
     p.drawText(r, 0, text);
+}
+
+// Where a measurement label lands for a given anchor. Clamped into the canvas: a measurement near the
+// top or left edge used to have its label drawn outside the widget, where the paint is simply clipped
+// and the number disappears. Exposed so the rule can be tested without a GL context.
+QRect CanvasWidget::measurementLabelRect(QPointF at, const QString& text) const
+{
+    const QFont font = overlayFont(this->font());
+    const QRect bounds = QFontMetrics(font).boundingRect(QRect(0, 0, 1000, 1000), 0, text);
+    QRect r = bounds.translated(int(at.x()) + 6, int(at.y()) - bounds.height() - 6);
+    const QRect viewport = rect().adjusted(2, 2, -2, -2);
+    if (r.right() > viewport.right()) r.moveRight(viewport.right());
+    if (r.left() < viewport.left()) r.moveLeft(viewport.left());
+    if (r.bottom() > viewport.bottom()) r.moveBottom(viewport.bottom());
+    if (r.top() < viewport.top()) r.moveTop(viewport.top());
+    return r;
 }
 
 CanvasWidget::RoiAnnotation CanvasWidget::buildRoi(const bool ellipse, int row0, int col0,
@@ -421,35 +477,14 @@ void CanvasWidget::paintGL()
     glDisable(GL_TEXTURE_2D);
 
     // Overlays live inside paintGL so they cannot sit on top of the GL surface as child widgets and
-    // intercept mouse input (roadmap 2.6). Consistent font and contrast, one call, no animations.
-    // The measurement overlays always draw when present - the canvas has nothing better to show
-    // than its own measurements, with or without the corner overlay text sharing the pass.
+    // intercept mouse input (roadmap 2.6). The drawing itself lives in paintOverlays(), so the same
+    // code can be painted into an image on a machine with no GL context — which is how the contrast
+    // and clamping behaviour is tested.
     if (measurementCount() > 0 || m_measureDragging || !m_anglePending.empty() || !m_rois.empty() ||
-        m_roiDragging ||
-        !m_overlayLeft.isEmpty() || !m_overlayRight.isEmpty()) {
+        m_roiDragging || !m_overlayLeft.isEmpty() || !m_overlayRight.isEmpty()) {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        QFont font = painter.font();
-        font.setPointSizeF(10.0);
-        painter.setFont(font);
-        drawMeasurements(painter);
-        drawRois(painter);
-        const QColor text(0xe6, 0xe6, 0xe6, 230);
-        const QColor shadow(0, 0, 0, 160);   // enough contrast on any image, still plain
-        const int pad = 8;
-        if (!m_overlayLeft.isEmpty())
-            painter.drawText(QRect(pad, pad, width() - 2 * pad, 200), Qt::AlignLeft | Qt::AlignTop
-                                                                          | Qt::TextWordWrap,
-                             m_overlayLeft);
-        if (!m_overlayRight.isEmpty()) {
-            const QRect bounds = painter.boundingRect(
-                QRect(0, 0, width() - 2 * pad, 200), Qt::AlignRight | Qt::TextWordWrap,
-                m_overlayRight);
-            painter.setPen(shadow);
-            painter.drawText(bounds.translated(1, 1), Qt::AlignRight, m_overlayRight);
-            painter.setPen(text);
-            painter.drawText(bounds, Qt::AlignRight, m_overlayRight);
-        }
+        paintOverlays(painter);
         painter.end();
     }
 
