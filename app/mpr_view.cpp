@@ -178,6 +178,14 @@ int MprView::planeIndex(int axis) const
     return (axis >= 0 && axis < int(m_planes.size())) ? m_planes[size_t(axis)].index : -1;
 }
 
+void MprView::centerPlanesForCapture()
+{
+    if (!m_haveVolume) return;
+    setPlanePosition(0, m_volume.depth / 2);
+    setPlanePosition(1, m_volume.height / 2);
+    setPlanePosition(2, m_volume.width / 2);
+}
+
 QImage MprView::compositeImage()
 {
     QImage image = grab().toImage();

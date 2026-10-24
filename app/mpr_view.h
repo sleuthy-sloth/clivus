@@ -42,6 +42,10 @@ public:
     // Documentation capture: the dialog with each plane's GL framebuffer pasted in, since a widget
     // grab leaves QOpenGLWidget surfaces empty. Returns a null image when there is nothing to show.
     QImage compositeImage();
+    // Documentation capture: centre every plane in its own coordinate before grabbing. Without this
+    // the shot shows the coronal/sagittal planes at position 1, which is an edge row and looks like a
+    // broken window rather than a reformat.
+    void centerPlanesForCapture();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

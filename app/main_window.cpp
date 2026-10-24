@@ -687,7 +687,10 @@ bool MainWindow::captureMprImage(const QString& path)
         QThread::msleep(100);
     }
     if (!view.haveVolumeForTest()) return false;
-    view.setReformatForTest(true, 1, 5.0);   // linear interpolation + MIP, so the shot shows the row
+    // Centre the planes first: a reformat shot pinned at position 1 shows an empty edge plane and
+    // reads as a broken window. Then linear + MIP so the new controls are visibly doing something.
+    view.centerPlanesForCapture();
+    view.setReformatForTest(true, 1, 5.0);
     QApplication::processEvents();
     QThread::msleep(500);
     QApplication::processEvents();
