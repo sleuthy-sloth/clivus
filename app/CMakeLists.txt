@@ -88,6 +88,12 @@ target_link_libraries(clivus_test_canvas_view PRIVATE clivus_core Qt6::Widgets Q
 add_test(NAME canvas_view COMMAND clivus_test_canvas_view)
 set_tests_properties(canvas_view PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Browser hierarchy: pure grouping and labelling, no widgets, no window.
+qt_add_executable(clivus_test_browser_model test_browser_model.cpp browser_model.cpp
+                                                     series_summary.cpp)
+target_link_libraries(clivus_test_browser_model PRIVATE clivus_core Qt6::Gui)
+add_test(NAME browser_model COMMAND clivus_test_browser_model)
+
 # DICOMweb client: Qt6::Network is the only addition; the test runs a mock HTTP server in-process.
 qt_add_executable(clivus_test_dicomweb test_dicomweb.cpp dicomweb_client.cpp)
 target_link_libraries(clivus_test_dicomweb PRIVATE clivus_core Qt6::Core Qt6::Network)
