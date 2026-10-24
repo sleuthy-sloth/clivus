@@ -69,6 +69,13 @@ int main(int argc, char** argv)
     // host without one still captures these truthfully instead of shipping hand-made mockups.
     const QCommandLineOption capture("capture", "Save welcome/About PNGs to this folder and exit.", "dir");
     parser.addOption(capture);
+    // MPR capture is separate because it needs a volume with depth: the committed corpus has a single
+    // CT slice, so a reformat of it is one pixel wide. tools/make_phantom.py generates a synthetic
+    // stack for this, and the caption in the README says so.
+    const QCommandLineOption captureMpr("capture-mpr",
+                                       "Open the folder, reslice it and save mpr.png to this folder.",
+                                       "dir");
+    parser.addOption(captureMpr);
     parser.addPositionalArgument("folder", "DICOM folder to open", "[folder]");
     parser.process(app);
 
@@ -167,6 +174,21 @@ int main(int argc, char** argv)
             }
         }
         return 0;
+    }
+    if (parser.isSet(captureMpr)) {
+        if (args.isEmpty()) return 2;
+        const QString dir = parser.value(captureMpr);
+        QDir().mkpath(dir);
+        window.openFolder(args.first());
+        QElapsedTimer scanClock;
+        scanClock.start();
+        while (!window.hasSeriesForCapture() && scanClock.elapsed() < 30000) {
+            QApplication::processEvents(QEventLoop::AllEvents, 100);
+            QThread::msleep(50);
+        }
+        if (!window.selectSeriesForCapture(QStringLiteral("CT")))
+            window.selectSeriesForCapture(QStringLiteral("MR"));
+        return window.captureMprImage(dir + QStringLiteral("/mpr.png")) ? 0 : 3;
     }
     if (!args.isEmpty()) window.openFolder(args.first());
     if (parser.isSet(bench)) window.runBenchmark(parser.value(bench).toInt());

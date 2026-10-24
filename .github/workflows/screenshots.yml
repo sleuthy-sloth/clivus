@@ -16,6 +16,7 @@ jobs:
       - name: Toolchain
         run: |
           brew install cmake ninja qt dcmtk
+          python3 -m pip install --quiet --break-system-packages pydicom numpy
           brew --prefix qt > qt-prefix.txt
           brew --prefix dcmtk > dcmtk-prefix.txt
           echo "QT=$(cat qt-prefix.txt)" >> $GITHUB_ENV
@@ -37,6 +38,10 @@ jobs:
           # The viewer with a study loaded and a slice decoded (needs the window server this runner
           # has; the app skips the canvas shot honestly if no context is available).
           ./build/app/clivus --capture shots "$PWD/testdata/corpus" || echo "viewer capture unavailable"
+          # MPR needs a volume with depth; the committed corpus is a single 128x128 CT object, so the
+          # shot is taken on a generated synthetic phantom instead of a black one-pixel reformat.
+          python3 tools/make_phantom.py /tmp/phantom 64
+          ./build/app/clivus --capture-mpr shots /tmp/phantom || echo "MPR capture unavailable"
           ls -la shots
 
       - uses: actions/upload-artifact@v4
