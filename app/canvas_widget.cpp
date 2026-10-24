@@ -661,7 +661,16 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e)
 void CanvasWidget::wheelEvent(QWheelEvent* e)
 {
     if (e->modifiers() & Qt::ControlModifier) {          // ctrl+wheel zooms, like Horos
+        // Zoom about the pointer, not the middle of the viewport. Zooming about the centre makes the
+        // thing you are looking at slide away as you zoom in — you chase it with the pan instead of
+        // inspecting it. Taking the image point under the cursor before the zoom and panning so it
+        // lands back under the cursor afterwards is the whole trick.
+        const QPointF anchor = e->position();
+        const QPointF imageUnderCursor = mapToFrame(anchor);
+        const double before = m_zoom;
         m_zoom = std::clamp(m_zoom * (e->angleDelta().y() > 0 ? 1.1f : 1.0f / 1.1f), 0.1f, 20.0f);
+        if (m_frame.valid() && m_zoom != before)
+            m_pan += anchor - frameToWidget(imageUnderCursor);
         emit viewChanged();
         update();
         return;

@@ -97,6 +97,10 @@ public:
     // Overlay text the window composes; the canvas only draws it (roadmap 1.4). Empty parts are
     // simply not drawn.
     double zoomFactor() const { return m_zoom; }
+    // Widget point <-> image-pixel point. Public because the pixel-value readout needs the same
+    // mapping the measurement tools use, and because the zoom anchoring is tested through it.
+    QPointF mapToFrame(QPointF widget) const;
+    QPointF frameToWidget(QPointF imagePixel) const;
     // Pan offset in widget pixels. Exposed next to zoomFactor() so the view-state rules (what a slice
     // step keeps, what a series switch resets) are testable without a GL context.
     QPointF viewPan() const { return m_pan; }
@@ -122,11 +126,6 @@ protected:
 
 private:
     void uploadTexture();
-    // Widget point -> image-pixel point (the inverse of the rect fit/map in paintGL).
-    QPointF mapToFrame(QPointF widget) const;
-    // The inverse of mapToFrame: image-pixel point -> widget point. ROIs are stored in image pixels
-    // and must land correctly after any zoom or pan.
-    QPointF frameToWidget(QPointF imagePixel) const;
     // mm for two widget points, and the interior angle at the middle of three (degrees). Both
     // return 0 when the geometry degenerates; distance reports spacing_known = false when the
     // header gave no spacing (never invent one).

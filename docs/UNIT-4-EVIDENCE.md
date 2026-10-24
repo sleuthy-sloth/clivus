@@ -71,11 +71,30 @@ $ ctest --test-dir build/linux-core
 Total Test time (real) =   0.87 sec
 ```
 
+## Part 2a — pointer-anchored zoom (shipped)
+
+Ctrl+wheel zoomed about the viewport centre, so the thing being inspected slid out of view as you
+zoomed in and you chased it with the pan. `wheelEvent` now takes the image point under the cursor
+before the zoom and adds `anchor - frameToWidget(thatPoint)` to the pan after it, which puts the same
+pixel back under the cursor.
+
+`mapToFrame`/`frameToWidget` became public for this: the test drives them, and the pixel-value readout
+on the roadmap needs the same mapping the measurement tools already use.
+
+`canvas_view` gained two checks: the image point under an off-centre cursor stays under it after a
+zoom, and after zooming back out it is still there. Against the centre-anchored code both fail:
+
+```
+FAIL the image point under the cursor stays under the cursor after a zoom
+FAIL zooming back out keeps the same point under the cursor
+```
+
+A wrong turn worth recording: the first run of this test "passed" because the build had failed —
+`mapToFrame` was private — and the stale binary ran. The suite looked green and proved nothing. The
+tell was `grep -c " error|FAILED"` returning nonzero next to a passing test.
+
 ## Still open in unit 4
 
-- **Pointer-anchored zoom.** Ctrl+wheel zooms about the viewport centre today
-  (`canvas_widget.cpp:616-625`), so the pixel under the cursor drifts. Needs the image-space point
-  captured before the zoom and the pan adjusted after.
 - **Canvas slice-scrub gesture.** No mouse gesture on the image changes the slice index: left drag is
   window/level or measurement, right drag pans, the wheel steps slices. Plan calls for a middle-drag
   or modifier-drag routed through the existing `goToSlice()` coalescing, with an explicit mapping

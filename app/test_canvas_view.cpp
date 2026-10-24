@@ -116,6 +116,30 @@ int main(int argc, char** argv)
                "a frame with a different matrix resets the view");
     }
 
+    {   // The pixel under the cursor stays under the cursor while zooming: zooming about the viewport
+        // centre made the thing being inspected slide out of view.
+        canvas.setFrame(makeFrame(160, 160, 0));
+        const QPointF cursor(260, 90);              // deliberately off-centre
+        const QPointF imagePoint = canvas.mapToFrame(cursor);
+        const QPointF at(260, 90);
+        QWheelEvent zoomIn(at, canvas.mapToGlobal(at.toPoint()), QPoint(0, 0), QPoint(0, 120),
+                           Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&canvas, &zoomIn);
+        QApplication::processEvents();
+        const QPointF after = canvas.frameToWidget(imagePoint);
+        expect(std::abs(after.x() - cursor.x()) < 1.0 && std::abs(after.y() - cursor.y()) < 1.0,
+               "the image point under the cursor stays under the cursor after a zoom");
+
+        // Zooming out twice returns near the original framing rather than drifting away.
+        QWheelEvent zoomOut(at, canvas.mapToGlobal(at.toPoint()), QPoint(0, 0), QPoint(0, -120),
+                            Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+        for (int i = 0; i < 2; ++i) { QApplication::sendEvent(&canvas, &zoomOut); }
+        QApplication::processEvents();
+        const QPointF back = canvas.frameToWidget(imagePoint);
+        expect(std::abs(back.x() - cursor.x()) < 2.0 && std::abs(back.y() - cursor.y()) < 2.0,
+               "zooming back out keeps the same point under the cursor");
+    }
+
     if (failures == 0) std::printf("canvas_view: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }
