@@ -133,6 +133,21 @@ MainWindow::MainWindow(QWidget* parent)
     m_canvas = new CanvasWidget(this);
     // The gestures are fixed regardless of the highlighted tool, so they are stated once here
     // (roadmap 2.1) instead of being implied by whichever action happens to be checked.
+    connect(m_canvas, &CanvasWidget::pixelInfoChanged, this,
+            [this](const CanvasWidget::PixelInfo& info) {
+                if (!m_pixelReadout) return;
+                if (!info.valid) {
+                    m_pixelReadout->clear();
+                    return;
+                }
+                QString text = QString("r%1 c%2").arg(info.row).arg(info.col);
+                if (info.storedKnown)
+                    text += QString("   %1").arg(QString::number(info.stored, 'g', 6));
+                text += QString("   %1").arg(QString::number(info.modality, 'g', 6));
+                if (!info.unit.isEmpty()) text += " " + info.unit;
+                m_pixelReadout->setText(text);
+            });
+
     m_canvas->setToolTip("Left-drag = window/level · Right-drag = pan · Double-click or R = reset view "
                          "· Wheel = slices · Ctrl+wheel = zoom");
     m_sliceBar = new SliceBar(this);
@@ -176,6 +191,13 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_status = new QLabel("Ready", this);
     statusBar()->addWidget(m_status, 1);
+
+    // Pixel readout (roadmap: pixel pointer). Row/column, then the numbers the file actually supports:
+    // stored value, modality value, and a unit only when the object earned one.
+    m_pixelReadout = new QLabel(this);
+    m_pixelReadout->setTextFormat(Qt::PlainText);
+    m_pixelReadout->setToolTip("Pointer position and pixel values under the cursor");
+    statusBar()->addPermanentWidget(m_pixelReadout);
 
     m_progress = new QProgressBar(this);
     m_progress->setMaximumWidth(180);

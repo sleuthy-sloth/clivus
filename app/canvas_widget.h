@@ -97,6 +97,24 @@ public:
     // Overlay text the window composes; the canvas only draws it (roadmap 1.4). Empty parts are
     // simply not drawn.
     double zoomFactor() const { return m_zoom; }
+    // What the pointer is over: one image pixel, with the numbers the file actually supports. A value
+    // with a unit it has not earned is worse than a value with no unit, so `unit` is empty unless the
+    // object carried a rescale pair, and `stored` is meaningless unless `storedKnown`.
+    struct PixelInfo {
+        bool valid = false;
+        int row = 0;          // 1-based, as DICOM counts pixels
+        int col = 0;
+        double stored = 0.0;      // pre-modality-transform value
+        double modality = 0.0;    // after rescale: HU for CT, Gy for RT Dose, else stored units
+        bool storedKnown = false;
+        QString unit;             // empty when no calibrated unit is claimed
+    };
+    PixelInfo pixelInfoAt(QPointF widget) const;
+    // The frame's own sample, for tests that check the readout against the data rather than a constant.
+    float frameValueAtForTest(int index) const
+    {
+        return (index >= 0 && index < int(m_frame.pixels.size())) ? m_frame.pixels[size_t(index)] : 0.0f;
+    }
     // Widget point <-> image-pixel point. Public because the pixel-value readout needs the same
     // mapping the measurement tools use, and because the zoom anchoring is tested through it.
     QPointF mapToFrame(QPointF widget) const;
@@ -111,6 +129,7 @@ signals:
     // A ROI was added or removed: the window persists the current slice's list.
     void roisChanged();
     void viewChanged();                        // zoom or pan moved: overlays should refresh
+    void pixelInfoChanged(const CanvasWidget::PixelInfo& info);   // the pointer moved over the image
     void scrollRequested(int delta);          // wheel: next/previous slice
     void frameTiming(double windowMs, double paintMs, double fps);
 
@@ -166,7 +185,8 @@ private:
     float m_zoom = 1.0f;
     QPointF m_pan;
     QPoint m_lastMouse;
-    enum class Drag { None, Window, Pan, Measure, Roi } m_drag = Drag::None;
+    enum class Drag { None, Window, Pan, Measure, Roi, Scrub } m_drag = Drag::None;
+    double m_scrubAccum = 0.0;   // sub-step middle-drag movement, so a slow drag still steps
     ToolHint m_toolHint = ToolHint::WindowLevel;
     double m_windowMs = 0.0;
     std::chrono::steady_clock::time_point m_lastPaint{};

@@ -446,6 +446,19 @@ int main(int argc, char** argv)
         fs::remove_all(dir, ec);
     }
 
+    {   // The pixel readout may only say what the file supports. A CT with a rescale pair can call its
+        // modality value HU; an object with no calibrated unit must claim none, because a number with
+        // the wrong unit attached is worse than a number with no unit at all.
+        clivus::ImageFrame ct;
+        expect(clivus::loadFrame(corpus + "/CT_small.dcm", ct, 0), "loaded the CT object");
+        expect(ct.unit == "HU", "a CT carrying a rescale pair reports HU");
+        expect(ct.rescaleKnown, "the CT mapping is invertible, so a stored value is recoverable");
+
+        clivus::ImageFrame mr;
+        expect(clivus::loadFrame(corpus + "/MR_small.dcm", mr, 0), "loaded the MR object");
+        expect(mr.unit.empty(), "an object with no calibrated unit claims none");
+    }
+
     if (failures == 0) std::printf("scan: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -140,6 +140,71 @@ int main(int argc, char** argv)
                "zooming back out keeps the same point under the cursor");
     }
 
+    {   // Middle-drag scrubs the stack, through the same scrollRequested signal the wheel uses, so it
+        // inherits the decode coalescing instead of starting a second, competing path.
+        int steps = 0;
+        int net = 0;
+        const auto conn = QObject::connect(&canvas, &CanvasWidget::scrollRequested,
+                                           [&](int delta) { ++steps; net += delta; });
+        const QPointF at(200, 150);
+        QMouseEvent press(QEvent::MouseButtonPress, at, canvas.mapToGlobal(at.toPoint()),
+                          Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        // 40 px down is five 8-px steps.
+        QMouseEvent moveDown(QEvent::MouseMove, QPointF(at.x(), at.y() + 40),
+                             canvas.mapToGlobal(QPoint(int(at.x()), int(at.y()) + 40)), Qt::NoButton,
+                             Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &moveDown);
+        expect(steps == 5 && net == 5, "middle-drag down steps five slices forward");
+        steps = 0;
+        net = 0;
+        QMouseEvent moveUp(QEvent::MouseMove, at, canvas.mapToGlobal(at.toPoint()), Qt::NoButton,
+                           Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &moveUp);
+        expect(steps == 5 && net == -5, "dragging back up steps the same way back");
+        QMouseEvent release(QEvent::MouseButtonRelease, at, canvas.mapToGlobal(at.toPoint()),
+                            Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &release);
+        steps = 0;
+        QMouseEvent moveAfter(QEvent::MouseMove, QPointF(at.x(), at.y() + 40),
+                              canvas.mapToGlobal(QPoint(int(at.x()), int(at.y()) + 40)), Qt::NoButton,
+                              Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &moveAfter);
+        expect(steps == 0, "movement after the release does not scrub");
+
+        // A left drag still does window/level, not scrubbing.
+        steps = 0;
+        QMouseEvent leftPress(QEvent::MouseButtonPress, at, canvas.mapToGlobal(at.toPoint()),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &leftPress);
+        QApplication::sendEvent(&canvas, &moveDown);
+        QApplication::sendEvent(&canvas, &release);
+        expect(steps == 0, "left-drag remains window/level");
+        QObject::disconnect(conn);
+    }
+
+    {   // Pixel readout: row and column are 1-based image pixels, and the value is the frame's own
+        // number — not something derived from the display texture.
+        canvas.setFrame(makeFrame(160, 160, 0));
+        // Ask the canvas where image pixel (10, 20) is drawn rather than assuming the geometry: the
+        // readout's job is to invert that mapping, so deriving from it tests the pair, not my arithmetic.
+        const QPointF inside = canvas.frameToWidget(QPointF(10.5, 20.5));
+        const CanvasWidget::PixelInfo info = canvas.pixelInfoAt(inside);
+        expect(info.valid, "a point inside the image reports a pixel");
+        expect(info.row == 21 && info.col == 11, "row and column are 1-based image coordinates");
+        if (info.valid) {
+            const size_t index = size_t(info.row - 1) * 160 + size_t(info.col - 1);
+            expect(std::abs(info.modality - double(canvas.frameValueAtForTest(int(index)))) < 1e-6,
+                   "the value is the frame's own sample");
+            expect(!info.storedKnown || std::abs(info.stored - info.modality) < 1e-6,
+                   "with an identity transform the stored and modality values agree");
+            expect(info.unit.isEmpty(), "a frame with no rescale pair claims no calibrated unit");
+        }
+
+        const CanvasWidget::PixelInfo outside = canvas.pixelInfoAt(QPointF(2, 2));
+        expect(!outside.valid, "a point outside the image reports nothing");
+    }
+
     if (failures == 0) std::printf("canvas_view: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }

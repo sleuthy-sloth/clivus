@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace clivus {
@@ -45,6 +46,17 @@ struct ImageFrame {
     // nothing — measurements must report 'spacing unknown' rather than inventing a value.
     double pixelSpacingRow = 0.0;
     double pixelSpacingCol = 0.0;
+
+    // The modality transform that produced `pixels` from the stored values, so a readout can show both
+    // numbers. rescaleKnown is false when a non-linear LUT supplied the values: then the stored number
+    // cannot be recovered from the modality number, and a viewer that prints one anyway is inventing it.
+    float rescaleSlope = 1.0f;
+    float rescaleIntercept = 0.0f;
+    bool rescaleKnown = true;
+    // Calibrated unit for the modality value: "HU" for CT that carries a rescale pair, "Gy" for RT
+    // Dose. Empty means "modality units, no calibrated unit claimed" — never a guess, because a
+    // number with the wrong unit attached is worse than a number with none.
+    std::string unit;
 
     bool isColour() const { return channels == 3; }
 

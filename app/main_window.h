@@ -167,6 +167,9 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     WindowLevelBar* m_windowBar = nullptr;
     WindowPresetBar* m_presetBar = nullptr;
     QLabel* m_status = nullptr;
+    // The pixel readout sits in its own permanent status-bar slot: it changes on every pointer move and
+    // must not fight the slice/status text, which is rebuilt on every slice change.
+    QLabel* m_pixelReadout = nullptr;
     QProgressBar* m_progress = nullptr;
     QPushButton* m_cancel = nullptr;
     QTimer* m_scanTicker = nullptr;

@@ -135,6 +135,41 @@ int CanvasWidget::measurementCount() const
     return int(m_distances.size() + m_angles.size());
 }
 
+CanvasWidget::PixelInfo CanvasWidget::pixelInfoAt(QPointF widget) const
+{
+    PixelInfo info;
+    if (!m_frame.valid()) return info;
+
+    const QPointF p = mapToFrame(widget);
+    const int col = int(std::floor(p.x()));
+    const int row = int(std::floor(p.y()));
+    if (col < 0 || row < 0 || col >= m_frame.width || row >= m_frame.height) return info;
+
+    info.valid = true;
+    info.row = row + 1;   // DICOM counts pixels from 1
+    info.col = col + 1;
+
+    const size_t index = size_t(row) * size_t(m_frame.width) + size_t(col);
+    if (m_frame.isColour()) {
+        // A colour pixel has three numbers and no modality transform: report the first channel and say
+        // plainly what it is, rather than pretending there is one greyscale value.
+        if (index * 3 + 2 < m_frame.pixels.size()) {
+            info.modality = double(m_frame.pixels[index * 3]);
+            info.unit = QStringLiteral("RGB");
+        }
+        return info;
+    }
+    if (index >= m_frame.pixels.size()) return info;
+
+    info.modality = double(m_frame.pixels[index]);
+    if (m_frame.rescaleKnown && m_frame.rescaleSlope != 0.0f) {
+        info.storedKnown = true;
+        info.stored = (info.modality - double(m_frame.rescaleIntercept)) / double(m_frame.rescaleSlope);
+    }
+    if (!m_frame.unit.empty()) info.unit = QString::fromStdString(m_frame.unit);
+    return info;
+}
+
 QPointF CanvasWidget::frameToWidget(QPointF imagePixel) const
 {
     if (!m_frame.valid()) return QPointF();
@@ -512,6 +547,17 @@ void CanvasWidget::paintGL()
 void CanvasWidget::mousePressEvent(QMouseEvent* e)
 {
     m_lastMouse = e->pos();
+    // Middle-drag scrubs the stack. Left is window/level (or the measurement), right is pan and the
+    // wheel steps slices, so the remaining button is the one free gesture — and it is the one a
+    // radiology workstation typically gives to scrolling. The steps go out through scrollRequested, the
+    // same signal the wheel uses, so they inherit the existing decode coalescing rather than starting a
+    // second path that could fight it.
+    if (e->button() == Qt::MiddleButton) {
+        m_drag = Drag::Scrub;
+        m_scrubAccum = 0.0;
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
     // Measure tool: the LEFT interaction is the measurement (the tool's stated purpose); right-drag
     // keeps panning. A Shift+click gathers angle points; a plain left-drag starts a distance.
     if (m_toolHint == ToolHint::Measure && e->button() == Qt::LeftButton) {
@@ -565,6 +611,23 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
     const QPoint d = e->pos() - m_lastMouse;
     m_lastMouse = e->pos();
 
+    // The readout follows the pointer whether or not a drag is in progress: the pixel under the cursor
+    // is the question a person asks most often, and it should not require a mode.
+    emit pixelInfoChanged(pixelInfoAt(QPointF(e->pos())));
+
+    if (m_drag == Drag::Scrub) {
+        // Drag down = go forward through the stack, drag up = go back, at one slice per kScrubStep
+        // pixels. Sub-step movement accumulates so a slow drag still steps instead of being swallowed.
+        constexpr double kScrubStep = 8.0;
+        m_scrubAccum += double(d.y());
+        while (std::abs(m_scrubAccum) >= kScrubStep) {
+            const int direction = m_scrubAccum > 0.0 ? 1 : -1;
+            emit scrollRequested(direction);
+            m_scrubAccum -= double(direction) * kScrubStep;
+        }
+        return;
+    }
+
     if (m_drag == Drag::Measure) {
         m_measureEnd = QPointF(e->pos());
         update();
@@ -593,6 +656,12 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e)
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent*)
 {
+    if (m_drag == Drag::Scrub) {
+        m_drag = Drag::None;
+        m_scrubAccum = 0.0;
+        setToolHint(m_toolHint);   // restore the cursor the active tool asks for
+        return;
+    }
     if (m_drag == Drag::Roi) {
         m_drag = Drag::None;
         m_roiDragging = false;

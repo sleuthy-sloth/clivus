@@ -657,6 +657,7 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
 
     float slope = 1.0f;
     float intercept = 0.0f;
+    bool lutApplied = false;
     Float64 v = 0;
     if (ds->findAndGetFloat64(DCM_RescaleSlope, v).good()) slope = float(v);
     if (ds->findAndGetFloat64(DCM_RescaleIntercept, v).good()) intercept = float(v);
@@ -745,11 +746,27 @@ bool loadFrame(const std::string& file, ImageFrame& out, int frameIndex)
         }
         slope = 1.0f;
         intercept = 0.0f;   // the LUT already did the work
+        lutApplied = true;
     }
 
     out = makeFrame(std::move(raw), int(img.getWidth()), int(img.getHeight()),
                     slope, intercept, hasPadding, paddingValue);
     out.invert = invert;
+    // What the readout is allowed to say about this frame: the stored value is recoverable only when
+    // the mapping was invertible, and a calibrated unit is claimed only when the file supplies one.
+    out.rescaleSlope = slope;
+    out.rescaleIntercept = intercept;
+    out.rescaleKnown = !lutApplied && slope != 0.0f;
+    {
+        const std::string modality = anyVRString(ds, DCM_Modality);
+        if (lutApplied) {
+            out.unit.clear();
+        } else if (modality == "CT" && ds->tagExistsWithValue(DCM_RescaleSlope)) {
+            out.unit = "HU";
+        } else if (modality == "RTDOSE") {
+            out.unit = "Gy";
+        }
+    }
     out.frameIndex = int(want);
     out.frameCount = int(frames);
     // Physical pixel size (PS3.3 C.7.6.3.1.1): Pixel Spacing carries [row, column] spacing in mm.
