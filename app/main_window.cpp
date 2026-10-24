@@ -188,6 +188,10 @@ MainWindow::MainWindow(QWidget* parent)
     // One thread for the work the user is waiting on. Reading it from a timer, not from the worker,
     // keeps the scan from having to talk to widgets at all.
     m_foreground.setMaxThreadCount(1);
+    // And one thread for speculation, separate so it can never sit in front of a requested frame.
+    // The cost is that a prefetch and a requested decode can run at the same time; that is a brief
+    // second core of work, against a user-visible stall on every direction reversal.
+    m_prefetch.setMaxThreadCount(1);
     m_scanTicker = new QTimer(this);
     m_scanTicker->setInterval(150);
     connect(m_scanTicker, &QTimer::timeout, this, &MainWindow::updateScanProgress);
@@ -1261,8 +1265,11 @@ void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
     // Smooth scroll (radiology report: the wheel stutters and skips): with the display settled,
     // quietly decode the neighbour in the wheel's travel direction into a separate prefetch slot.
     // The next step presents it instantly (pumpSlice consumes the slot) instead of sitting through
-    // a decode. One decode at a time is untouched: both the main pump and the prefetch share the
-    // single foreground pool; a landing behind a series change is dropped by the epoch check.
+    // a decode. The speculative decode runs on its OWN single-thread pool: a requested frame must
+    // never queue behind work the user did not ask for, and QtConcurrent gives no way to cancel a
+    // task already handed to a pool — so on a direction reversal the old shared pool made the frame
+    // the user wanted wait for the frame they had just scrolled past. One decode at a time still
+    // holds within each pool, and a landing behind a series change is dropped by the epoch check.
     const int total = m_series[size_t(m_currentSeries)].totalFrames();
     const int ahead = m_currentSlice + (m_lastStep ? 1 : -1);
     if (ahead >= 0 && ahead < total && m_prefetchIndex != ahead) {
@@ -1272,7 +1279,7 @@ void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
             m_prefetchIndex = ahead;
             const std::string path = series.files[size_t(fileIndex)];
             const quint64 epoch = m_epoch;
-            m_prefetchWatcher->setFuture(QtConcurrent::run(&m_foreground, [path, epoch, frameIndex] {
+            m_prefetchWatcher->setFuture(QtConcurrent::run(&m_prefetch, [path, epoch, frameIndex] {
                 clivus::ImageFrame frame;
                 frame.frameIndex = 0;
                 const bool ok = clivus::loadFrame(path, frame, frameIndex);

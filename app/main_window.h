@@ -185,10 +185,14 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     double m_center = 0.0;
     double m_width = 1.0;
 
-    // Loading runs off the UI thread. Two pools on purpose: the folder scan and each slice decode go
+    // Loading runs off the UI thread. Three pools on purpose. The folder scan and each slice decode go
     // on m_foreground (one thread), so the first slice of a folder never queues behind that folder's
-    // thumbnails; the thumbnails themselves go on the global pool, one task per series.
+    // thumbnails; the thumbnails go on the global pool, one task per series. The speculative neighbour
+    // decode gets its own single-thread pool: QtConcurrent cannot cancel a running or queued task, so
+    // while the prefetch shared m_foreground a direction reversal made the frame the user actually
+    // asked for queue behind a decode of the frame they had just scrolled away from.
     QThreadPool m_foreground;
+    QThreadPool m_prefetch;
     std::shared_ptr<clivus::ScanControl> m_scanControl;
     QFutureWatcher<ScanResult>* m_scanWatcher = nullptr;
     QFutureWatcher<QImage>* m_thumbWatcher = nullptr;
