@@ -171,8 +171,24 @@ int main(int argc, char** argv)
 
     // Smooth scroll: with the display settled, the prefetch slot chases the neighbour in the
     // wheel's direction (default forward), so the next step can present without a decode wait.
+    //
+    // The series that happens to be second in the list differs by platform (directory order), and a
+    // single-frame series has no neighbour to prefetch: pick a multi-frame series explicitly rather
+    // than relying on whichever one sorts second here. This failed on Windows for exactly that
+    // reason while passing on Linux.
     w.setActiveTool(MainWindow::ActiveTool::WindowLevel);
-    CHECK(waitFor([&] { return w.prefetchIndex() == 1; }, 15000));
+    bool foundMultiFrame = false;
+    for (int row = 0; row < list->count(); ++row) {
+        list->setCurrentRow(row);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+        if (w.frameCountForTest() > 1) {
+            foundMultiFrame = true;
+            break;
+        }
+    }
+    CHECK(foundMultiFrame);   // the corpus has multi-frame series; if not, the fixture changed
+    CHECK(waitFor([&] { return w.canvasReady(); }, 20000));
+    CHECK(waitFor([&] { return w.prefetchIndex() >= 0; }, 20000));
 
     canvas->clearMeasurements();
     QSettings().clear();
