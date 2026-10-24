@@ -92,6 +92,22 @@ const clivus::SeriesInfo* findSeries(const std::vector<clivus::SeriesInfo>& all,
     return nullptr;
 }
 
+// A DICOM object of a class that cannot carry pixels (a structured report, a structure set). The scan
+// must write it off without the unbounded second read it used to pay for every such object.
+bool writeNonImageObject(const fs::path& file, const char* sopClass)
+{
+    DcmFileFormat ff;
+    DcmDataset* ds = ff.getDataset();
+    ds->putAndInsertString(DCM_SOPClassUID, sopClass);
+    ds->putAndInsertString(DCM_SOPInstanceUID, "1.2.826.0.1.3680043.9.8.1");
+    ds->putAndInsertString(DCM_StudyInstanceUID, "1.2.826.0.1.3680043.9.8");
+    ds->putAndInsertString(DCM_SeriesInstanceUID, "1.2.826.0.1.3680043.9.8.1");
+    ds->putAndInsertString(DCM_Modality, "SR");
+    // A value long enough to matter: the point of the case is that the scan never reads it in full.
+    ds->putAndInsertString(DCM_SeriesDescription, "structured report");
+    return ff.saveFile(file.string().c_str(), EXS_LittleEndianExplicit).good();
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -352,6 +368,34 @@ int main(int argc, char** argv)
             if (s.studyUid == "1.2.826.0.1.3680043.9.G")
                 expect(s.patientName == "M\xC3\xBCller", "a UTF-8 patient name survives unchanged");
         }
+        fs::remove_all(dir, ec);
+    }
+
+    {   // A structured report is not an image and never will be. The scan used to read the whole object
+        // a second time to find that out; a known non-image storage class is now written off after the
+        // bounded read, and the count says it happened.
+        const fs::path dir = fs::temp_directory_path() / "hw_scan_non_image";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        expect(writeObject(dir / "image.dcm", "1.2.826.0.1.3680043.9.H", "1.2.826.0.1.3680043.9.Y",
+                           "PID-A", "ALPHA^ONE", 1), "wrote an image object");
+        expect(writeNonImageObject(dir / "report.dcm", "1.2.840.10008.5.1.4.1.1.88.33"),
+               "wrote a comprehensive SR object");
+
+        clivus::ScanDiagnostics diag;
+        const auto series = clivus::scanDirectory(dir.string(), nullptr, &diag);
+        expect(series.size() == 1, "the report does not become a series");
+        expect(diag.skippedNonImage == 1, "the report is counted as skipped without a second read");
+
+        // Control: an unknown class with no pixels still gets the full parse, and is not counted as a
+        // known non-image — the deny-list must not grow into a filter that hides images it never saw.
+        expect(writeNonImageObject(dir / "unknown.dcm", "1.2.826.0.1.3680043.9.99.1"),
+               "wrote an object of an unrecognised storage class");
+        clivus::ScanDiagnostics second;
+        const auto afterUnknown = clivus::scanDirectory(dir.string(), nullptr, &second);
+        expect(afterUnknown.size() == 1, "the unrecognised class is still not an image");
+        expect(second.skippedNonImage == 1, "the unrecognised class is not counted as a known skip");
         fs::remove_all(dir, ec);
     }
 

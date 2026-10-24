@@ -139,8 +139,49 @@ void normaliseCharacterSet(DcmDataset* ds)
 // Data the object is read once more with no cap before being written off, because that cap is the
 // only thing sitting between a value-heavy object and a normal parse. Only a would-be miss pays for
 // the second read.
-std::unique_ptr<DcmFileFormat> loadHeader(const std::string& file)
+// Storage classes that carry no Pixel Data by definition. Used only to skip the unbounded second read:
+// the list is a deny-list on purpose, so an object it does not recognise still gets the full parse and
+// is judged on whether it actually has pixels. Missing one of these costs a re-read; listing an image
+// class here would hide a series, which is the worse mistake.
+bool isNonImageStorage(DcmDataset* ds)
 {
+    static const char* const kNonImage[] = {
+        "1.2.840.10008.1.3.10",             // Media Storage Directory (DICOMDIR)
+        "1.2.840.10008.5.1.4.1.1.11.1",     // Grayscale Softcopy Presentation State
+        "1.2.840.10008.5.1.4.1.1.11.2",     // Color Softcopy Presentation State
+        "1.2.840.10008.5.1.4.1.1.11.3",     // Pseudo-Color Softcopy Presentation State
+        "1.2.840.10008.5.1.4.1.1.11.4",     // Blending Softcopy Presentation State
+        "1.2.840.10008.5.1.4.1.1.66.4",     // Segmentation
+        "1.2.840.10008.5.1.4.1.1.88.11",    // Basic Text SR
+        "1.2.840.10008.5.1.4.1.1.88.22",    // Enhanced SR
+        "1.2.840.10008.5.1.4.1.1.88.33",    // Comprehensive SR
+        "1.2.840.10008.5.1.4.1.1.88.34",    // Comprehensive SR Instance
+        "1.2.840.10008.5.1.4.1.1.88.59",    // Key Object Selection Document
+        "1.2.840.10008.5.1.4.1.1.88.88",    // Acquisition Context SR
+        "1.2.840.10008.5.1.4.1.1.104.1",    // Encapsulated PDF
+        "1.2.840.10008.5.1.4.1.1.104.2",    // Encapsulated CDA
+        "1.2.840.10008.5.1.4.1.1.128",      // Basic Structured Display
+        "1.2.840.10008.5.1.4.1.1.481.2",    // RT Structure Set
+        "1.2.840.10008.5.1.4.1.1.481.5",    // RT Plan
+        "1.2.840.10008.5.1.4.1.1.481.8",    // RT Ion Plan
+    };
+    OFString sopClass;
+    if (ds->findAndGetOFString(DCM_SOPClassUID, sopClass).bad()) return false;
+    for (const char* known : kNonImage) {
+        if (sopClass == known) return true;
+    }
+    return false;
+}
+
+// Reads one object's header, or nothing when the object has no pixel data to show. The first read
+// caps element values at 4096 bytes, which is what keeps a folder scan cheap; if it reports no Pixel
+// Data the object is read once more with no cap before being written off, because that cap is the
+// only thing sitting between a value-heavy object and a normal parse. Only a would-be miss pays for
+// the second read — and a known non-image storage class does not pay it at all, which is what a
+// folder full of structured reports and RT structure sets used to cost.
+std::unique_ptr<DcmFileFormat> loadHeader(const std::string& file, bool* skippedNonImage = nullptr)
+{
+    if (skippedNonImage) *skippedNonImage = false;
     std::unique_ptr<DcmFileFormat> chosen;
 
     auto header = std::make_unique<DcmFileFormat>();
@@ -149,6 +190,10 @@ std::unique_ptr<DcmFileFormat> loadHeader(const std::string& file)
     if (ds && ds->tagExistsWithValue(DCM_PixelData)) {
         chosen = std::move(header);
     } else {
+        if (ds && isNonImageStorage(ds)) {
+            if (skippedNonImage) *skippedNonImage = true;
+            return nullptr;   // a report or a structure set: no pixels to look for
+        }
         auto full = std::make_unique<DcmFileFormat>();
         if (full->loadFile(file.c_str(), EXS_Unknown, EGL_noChange, 0xFFFFFFFFu).bad()) return nullptr;
         DcmDataset* fullDs = full->getDataset();
@@ -296,8 +341,13 @@ std::vector<SeriesInfo> scanDirectory(const std::string& dir, ScanControl* contr
         }
         if (!it->is_regular_file(ec)) { it.increment(ec); continue; }
         const fs::path p = it->path();
-        auto header = loadHeader(p.string());
-        if (!header) { it.increment(ec); continue; }
+        bool nonImage = false;
+        auto header = loadHeader(p.string(), &nonImage);
+        if (!header) {
+            if (nonImage && diagnostics) ++diagnostics->skippedNonImage;
+            it.increment(ec);
+            continue;
+        }
         DcmDataset* ds = header->getDataset();
 
         FileRecord r;

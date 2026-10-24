@@ -82,6 +82,7 @@ struct SeriesInfo {
 struct ScanDiagnostics {
     size_t conflictSplits = 0;      // extra series created because one UID carried two identities
     size_t quarantinedObjects = 0;  // objects with no SeriesInstanceUID, kept outside the real series
+    size_t skippedNonImage = 0;     // reports and structure sets skipped without a second full read
 };
 
 // Recursively scan dir for DICOM objects that carry pixel data, grouped by (StudyInstanceUID,
