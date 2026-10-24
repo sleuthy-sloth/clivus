@@ -2,6 +2,7 @@
 #pragma once
 #include <QElapsedTimer>
 #include <QOpenGLFunctions>
+#include <QImage>
 #include <QOpenGLWidget>
 #include <QPoint>
 #include <chrono>
@@ -57,6 +58,11 @@ public:
     void refreshRoiStats();
     // Documentation-capture helpers: frame extent, and one ROI built by the same code path a drag
     // uses (no separate statistics implementation for pictures).
+    // Export helpers: the framebuffer as displayed (window/level and zoom applied, no overlay text),
+    // and the window currently in use so a series export matches what the screen shows.
+    QImage captureCanvasImageForExport() { return grabFramebuffer(); }
+    double windowCenter() const { return m_center; }
+    double windowWidth() const { return m_width; }
     int frameWidthForCapture() const { return m_frame.width; }
     int frameHeightForCapture() const { return m_frame.height; }
     void addRoiForCapture(int row0, int col0, int row1, int col1);

@@ -68,6 +68,9 @@ public:
     void loadAnnotationsForSlice(int slice);
     void saveAnnotationsForSlice(int slice);
     void exportMeasurements();
+    void exportCurrentImage();
+    void exportSeriesImages();
+    void exportDeidentifiedCopy();
 
     // Cine (roadmap D3): play the current series at a fixed rate through the ordinary decode pump, so
     // playback never decodes faster than the one-at-a-time path allows and never shows a stale slice

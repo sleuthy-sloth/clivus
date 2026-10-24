@@ -3,6 +3,8 @@
 
 #include "about_dialog.h"
 #include "annotation_store.h"
+#include "deid_dialog.h"
+#include "export_images.h"
 #include "server_dialog.h"
 #include "series_summary.h"
 #include "branding.h"
@@ -13,8 +15,13 @@
 #include <QActionGroup>
 #include <QDir>
 #include <QFileDialog>
+#include <QProgressDialog>
 #include <QTextStream>
 #include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
+
+#include <atomic>
+#include <memory>
 #include <QIcon>
 #include <QImage>
 #include <QHBoxLayout>
@@ -40,6 +47,10 @@
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
+
+#include <atomic>
+#include <memory>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -373,6 +384,24 @@ MainWindow::MainWindow(QWidget* parent)
     auto* file = menuBar()->addMenu("&File");
     file->addAction(open);
     file->addAction(openFromServer);
+    auto* exportImage = new QAction("Export &image as PNG…", this);
+    exportImage->setToolTip("Write what the canvas is showing, at the current window/level and zoom, "
+                            "with no overlay text");
+    connect(exportImage, &QAction::triggered, this, &MainWindow::exportCurrentImage);
+    file->addAction(exportImage);
+
+    auto* exportSeries = new QAction("Export &series as PNGs…", this);
+    exportSeries->setToolTip("Write every slice of the open series as a PNG at the current "
+                             "window/level");
+    connect(exportSeries, &QAction::triggered, this, &MainWindow::exportSeriesImages);
+    file->addAction(exportSeries);
+
+    auto* exportDeid = new QAction("Export &de-identified copy…", this);
+    exportDeid->setToolTip("Write a copy of the open folder with patient identity removed from the "
+                           "metadata, then verify it");
+    connect(exportDeid, &QAction::triggered, this, &MainWindow::exportDeidentifiedCopy);
+    file->addAction(exportDeid);
+
     auto* exportAction = new QAction("&Export measurements…", this);
     exportAction->setToolTip("Write the open series' saved ROIs to a CSV file");
     connect(exportAction, &QAction::triggered, this, &MainWindow::exportMeasurements);
@@ -850,6 +879,81 @@ void MainWindow::exportMeasurements()
     }
     file.close();
     statusBar()->showMessage(QString("Exported %1 ROIs to %2").arg(rows).arg(path), 6000);
+}
+
+void MainWindow::exportCurrentImage()
+{
+    if (!m_canvas->hasValidFrame()) {
+        statusBar()->showMessage("Nothing to export yet: open a study and wait for an image", 5000);
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export image", QDir(m_folder).filePath("slice.png"), "PNG image (*.png)");
+    if (path.isEmpty()) return;
+    const QImage image = m_canvas->captureCanvasImageForExport();
+    QString error;
+    if (exportDisplayedPng(image, path, &error)) {
+        statusBar()->showMessage(
+            QString("Wrote %1 (%2 x %3, window/level applied, no overlays)")
+                .arg(path).arg(image.width()).arg(image.height()), 6000);
+    } else {
+        statusBar()->showMessage(error, 8000);
+    }
+}
+
+void MainWindow::exportSeriesImages()
+{
+    if (m_currentSeries < 0) {
+        statusBar()->showMessage("Open a series first", 4000);
+        return;
+    }
+    const QString folder = QFileDialog::getExistingDirectory(this, "Folder for the PNG series");
+    if (folder.isEmpty()) return;
+
+    const clivus::SeriesInfo series = m_series[size_t(m_currentSeries)];
+    const double center = m_canvas->windowCenter();
+    const double width = m_canvas->windowWidth();
+    auto cancelled = std::make_shared<std::atomic<bool>>(false);
+
+    auto* progress = new QProgressDialog(QString("Exporting %1 slices…").arg(series.totalFrames()),
+                                        "Cancel", 0, 0, this);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->show();
+
+    auto* watcher = new QFutureWatcher<SeriesExportResult>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, progress, folder] {
+        const SeriesExportResult result = watcher->result();
+        watcher->deleteLater();
+        progress->close();
+        progress->deleteLater();
+        if (!result.error.isEmpty()) {
+            statusBar()->showMessage(result.error, 8000);
+            return;
+        }
+        QString message = QString("Wrote %1 PNGs to %2").arg(result.written).arg(folder);
+        if (result.failed > 0)
+            message += QString("; %1 slices could not be decoded (%2)")
+                           .arg(result.failed)
+                           .arg(result.failures.value(0));
+        if (result.cancelled) message = QString("Export cancelled after %1 files").arg(result.written);
+        statusBar()->showMessage(message, 8000);
+    });
+    connect(progress, &QProgressDialog::canceled, this, [cancelled] { *cancelled = true; });
+    watcher->setFuture(QtConcurrent::run([series, center, width, folder, cancelled] {
+        return exportSeriesPngs(series, center, width, folder,
+                                [cancelled] { return cancelled->load(); });
+    }));
+}
+
+void MainWindow::exportDeidentifiedCopy()
+{
+    if (m_folder.isEmpty()) {
+        statusBar()->showMessage("Open a folder first", 4000);
+        return;
+    }
+    DeidDialog dialog(m_folder, this);
+    dialog.exec();
 }
 
 // A folder dropped anywhere on the window opens it; a single DICOM file opens its folder (the scan
