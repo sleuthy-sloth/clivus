@@ -97,6 +97,9 @@ public:
     // Overlay text the window composes; the canvas only draws it (roadmap 1.4). Empty parts are
     // simply not drawn.
     double zoomFactor() const { return m_zoom; }
+    // Pan offset in widget pixels. Exposed next to zoomFactor() so the view-state rules (what a slice
+    // step keeps, what a series switch resets) are testable without a GL context.
+    QPointF viewPan() const { return m_pan; }
     void setOverlay(const QString& topLeft, const QString& topRight);
 
 signals:

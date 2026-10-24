@@ -81,6 +81,13 @@ target_link_libraries(clivus_test_overlay_render PRIVATE clivus_core Qt6::Widget
 add_test(NAME overlay_render COMMAND clivus_test_overlay_render)
 set_tests_properties(overlay_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# View state: what a slice step keeps and what a series switch resets.
+qt_add_executable(clivus_test_canvas_view test_canvas_view.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_test_canvas_view PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+                                                     OpenGL::GL)
+add_test(NAME canvas_view COMMAND clivus_test_canvas_view)
+set_tests_properties(canvas_view PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # DICOMweb client: Qt6::Network is the only addition; the test runs a mock HTTP server in-process.
 qt_add_executable(clivus_test_dicomweb test_dicomweb.cpp dicomweb_client.cpp)
 target_link_libraries(clivus_test_dicomweb PRIVATE clivus_core Qt6::Core Qt6::Network)

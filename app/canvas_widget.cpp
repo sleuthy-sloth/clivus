@@ -92,14 +92,22 @@ void CanvasWidget::setFrame(clivus::ImageFrame frame)
     // comes with the frame, so a re-decoded slice re-states its own identity.
     const bool sameSlice = frame.valid() && m_lastFrameIndex == frame.frameIndex;
     m_lastFrameIndex = frame.frameIndex;
+    // Zoom and pan are viewport state, not slice state. Stepping through a series keeps them — that is
+    // what comparing slices of one stack needs, and it is what the fitView comment has always claimed
+    // while the code reset both on every frame. They reset when the image itself changes shape or goes
+    // away: a new series, a different matrix, a closed folder.
+    const bool keepView = frame.valid() && m_frame.valid() && frame.width == m_frame.width &&
+                          frame.height == m_frame.height;
     // An invalid frame (series switch) is a slice change by definition: drop the slice's output.
     setPixelSpacing(frame.pixelSpacingRow, frame.pixelSpacingCol);
     if (!sameSlice) clearMeasurements();
 
     m_frame = std::move(frame);
     m_frame.fullWindow(m_center, m_width);
-    m_zoom = 1.0f;
-    m_pan = QPointF(0, 0);
+    if (!keepView) {
+        m_zoom = 1.0f;
+        m_pan = QPointF(0, 0);
+    }
     m_texDirty = true;
     m_lastPaint = {};   // the old interval belongs to the previous image
     emit windowChanged(m_center, m_width);
@@ -378,9 +386,11 @@ void CanvasWidget::resetView()
 // restores the full dynamic window. Both emit viewChanged so the zoom percentage in the overlay and
 // the status line is never stale after a toolbar click.
 //
-// Slice changes keep zoom and pan: setFrame() is only called when a new *series* is shown or a folder
-// is opened, and that is what resets the view. Stepping through slices of one series therefore holds
-// the zoom the user chose, which is what a stack comparison needs.
+// Slice changes keep zoom and pan: setFrame() only resets the view when the frame is invalid or its
+// matrix changes, which is what a series switch or a closed folder looks like. Stepping through the
+// slices of one series therefore holds the zoom the user chose, which is what a stack comparison
+// needs. (This comment described the intent for a long time while setFrame() reset both on every
+// frame; the code now matches it.)
 void CanvasWidget::fitView()
 {
     m_zoom = 1.0f;
