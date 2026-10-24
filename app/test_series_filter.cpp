@@ -108,6 +108,41 @@ int main(int argc, char** argv)
         if (a->shortcut() == QKeySequence::Find) { found = true; break; }
     CHECK(found);
 
+    // 6. A mid-scan batch repopulates the list and keeps the selection rule intact. The corpus is
+    // smaller than the progress interval, so this drives the batch path directly — the same entry
+    // point the worker's queued signal calls.
+    {
+        std::vector<clivus::SeriesInfo> batch;
+        for (int i = 0; i < total + 4; ++i) {
+            clivus::SeriesInfo s;
+            s.seriesUid = "1.2.826.0.1.3680043.9.B" + std::to_string(i);
+            s.studyUid = "1.2.826.0.1.3680043.9.S" + std::to_string(i);
+            s.seriesDescription = "BATCH SERIES " + std::to_string(i);
+            s.modality = "CT";
+            s.width = 64;
+            s.height = 64;
+            batch.push_back(s);
+        }
+        search->clear();
+        const quint64 epoch = w.folderEpochForTest();
+        w.applyScanBatchForTest(epoch, batch);
+        CHECK(list->count() == int(batch.size()));
+        CHECK(visibleCount(list) == int(batch.size()));
+        CHECK(list->currentRow() == 0);   // first series selected, as a finished scan would leave it
+
+        // A batch from a folder the user has already left must change nothing.
+        std::vector<clivus::SeriesInfo> stale = batch;
+        for (auto& s : stale) s.seriesDescription = "STALE";
+        w.applyScanBatchForTest(epoch + 7, stale);
+        CHECK(list->count() == int(batch.size()));
+        CHECK(!list->item(0)->text().contains(QStringLiteral("STALE")));
+
+        // Filtering still works on rows that arrived as a batch.
+        search->setText(QStringLiteral("BATCH SERIES 3"));
+        CHECK(visibleCount(list) >= 1);
+        search->clear();
+    }
+
     std::printf("series filter: all checks passed (%d series)\n", total);
     return 0;
 }

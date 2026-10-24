@@ -15,7 +15,9 @@
 #include <QActionGroup>
 #include <QDir>
 #include <QFileDialog>
+#include <QPointer>
 #include <QProgressDialog>
+#include <QSignalBlocker>
 #include <QTextStream>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -30,6 +32,8 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPointer>
+#include <QSignalBlocker>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPixmap>
@@ -528,7 +532,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     restoreLayout();   // roadmap 3.1: geometry, splitter, sidebar and diagnostics from QSettings
 
-    connect(m_seriesList, &QListWidget::currentRowChanged, this, &MainWindow::showSeries);
+    // The row number is not the series index once a filter hides rows, so the row's UserRole carries
+    // the index it stands for. Without this, clicking the first row of a filtered list opened whichever
+    // series happened to be index 0.
+    connect(m_seriesList, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (!m_seriesList || row < 0) { showSeries(-1); return; }
+        const QListWidgetItem* item = m_seriesList->item(row);
+        const int index = item ? item->data(Qt::UserRole).toInt() : row;
+        showSeries(index);
+    });
     // Roadmap 3.4: keyboard navigation — arrows move currentRow (loading as it goes, since
     // currentRowChanged drives showSeries), and Return/Enter activates the row under the caret even
     // when it is already current (e.g. after tabbing in with the mouse having selected elsewhere).
@@ -1069,9 +1081,27 @@ void MainWindow::startScan()
     m_scanTicker->start();
 
     const std::string folder = m_folder.toStdString();
-    m_scanWatcher->setFuture(QtConcurrent::run(&m_foreground, [folder, control] {
+    // Every open gets a new epoch: a batch queued by a folder the user has left must not paint over
+    // the folder they are looking at now.
+    const quint64 epoch = ++m_folderEpoch;
+    QPointer<MainWindow> self(this);
+    m_scanWatcher->setFuture(QtConcurrent::run(&m_foreground, [folder, control, self, epoch] {
         ScanResult r;
-        r.series = clivus::scanDirectoryCached(folder, control.get());
+        clivus::ScanProgress progress;
+        if (self) {
+            // The worker keeps its own records; the UI gets a copy, handed over through the event
+            // loop so nothing touches widgets from this thread.
+            progress = [self, epoch](const std::vector<clivus::SeriesInfo>& snapshot) {
+                std::vector<clivus::SeriesInfo> copy = snapshot;
+                QMetaObject::invokeMethod(
+                    self,
+                    [self, epoch, copy = std::move(copy)]() {
+                        if (self) self->applyScanBatch(epoch, copy);
+                    },
+                    Qt::QueuedConnection);
+            };
+        }
+        r.series = clivus::scanDirectoryCached(folder, control.get(), progress);
         r.cancelled = control->cancel.load(std::memory_order_relaxed);
         return r;
     }));
@@ -1091,21 +1121,23 @@ void MainWindow::scanFinished()
     ScanResult r = m_scanWatcher->result();
     if (r.cancelled) {
         setIdleProgress();
-        m_status->setText(
-            QString("Scan cancelled — the folder was left unread; you can open it again or pick "
-                    "another one. The application is still usable."));
+        // Batches already shown stay shown: throwing away a nearly finished scan because the user
+        // stopped it was the old behaviour and it helped nobody.
+        if (!m_series.empty()) {
+            m_status->setText(
+                QString("Scan cancelled — showing the %1 series found before you stopped it.")
+                    .arg(m_series.size()));
+        } else {
+            m_status->setText(
+                QString("Scan cancelled — the folder was left unread; you can open it again or pick "
+                        "another one. The application is still usable."));
+        }
         return;
     }
 
+    const QString keepUid = currentSeriesUid();
     m_series = std::move(r.series);
-    m_seriesList->clear();
-    for (const auto& s : m_series) {
-        auto* item = new QListWidgetItem(clivus::ui::seriesLabel(s), m_seriesList);
-        // Deliberately not the patient name: ordinary hover tooltips stay free of identifying
-        // metadata (roadmap 1.3 / 3.5). The description and modality line are enough to pick a series.
-        item->setToolTip(clivus::ui::seriesLabel(s));
-    }
-    applySeriesFilter();   // roadmap 3.2: a query typed before the scan finished still applies
+    rebuildSeriesRows(keepUid);
 
     if (m_series.empty()) {
         setIdleProgress();
@@ -1123,6 +1155,64 @@ void MainWindow::scanFinished()
     startThumbnails();
     const int row = m_benchFrames > 0 ? std::min(m_benchRow, int(m_series.size()) - 1) : 0;
     m_seriesList->setCurrentRow(row);
+}
+
+// One builder for the rows, shared by the mid-scan batches and the finished scan so the two cannot
+// drift. The selection is restored by series UID: a batch can legitimately add a series that sorts
+// above the current one, and losing the selection because a row moved is a bug the user sees.
+void MainWindow::rebuildSeriesRows(const QString& keepUid)
+{
+    {
+        // Blocked only while the rows are rebuilt: clearing the list emits currentRowChanged(-1), and
+        // acting on that mid-rebuild would start a decode for a series that is about to be replaced.
+        // The blocker must NOT cover setCurrentRow below, or the new selection never reaches showSeries.
+        const QSignalBlocker blocker(m_seriesList);
+        m_seriesList->clear();
+        for (size_t i = 0; i < m_series.size(); ++i) {
+            auto* item = new QListWidgetItem(clivus::ui::seriesLabel(m_series[i]), m_seriesList);
+            // Deliberately not the patient name: ordinary hover tooltips stay free of identifying
+            // metadata (roadmap 1.3 / 3.5). The description and modality line is enough to pick one.
+            item->setToolTip(clivus::ui::seriesLabel(m_series[i]));
+            item->setData(Qt::UserRole, int(i));
+        }
+        applySeriesFilter();   // roadmap 3.2: a query typed before the scan finished still applies
+    }
+
+    int row = -1;
+    if (!keepUid.isEmpty()) {
+        for (int i = 0; i < m_seriesList->count(); ++i) {
+            const QListWidgetItem* item = m_seriesList->item(i);
+            if (!item || item->isHidden()) continue;
+            const int index = item->data(Qt::UserRole).toInt();
+            if (index >= 0 && index < int(m_series.size()) &&
+                QString::fromStdString(m_series[size_t(index)].seriesUid) == keepUid) {
+                row = i;
+                break;
+            }
+        }
+    }
+    if (row < 0) {
+        for (int i = 0; i < m_seriesList->count(); ++i) {
+            const QListWidgetItem* item = m_seriesList->item(i);
+            if (item && !item->isHidden() && !item->data(Qt::UserRole + 1).toBool()) { row = i; break; }
+        }
+    }
+    if (row >= 0) m_seriesList->setCurrentRow(row);
+}
+
+// A snapshot from a scan that is still running. Only ever grows the list: a snapshot with nothing new
+// would rebuild every row and drop the selection for no reason, and the finished scan supersedes all
+// of this anyway.
+void MainWindow::applyScanBatch(quint64 folderEpoch, std::vector<clivus::SeriesInfo> batch)
+{
+    if (folderEpoch != m_folderEpoch) return;   // a folder the user has already left
+    if (batch.size() <= m_series.size()) return;
+
+    const QString keepUid = currentSeriesUid();
+    m_series = std::move(batch);
+    rebuildSeriesRows(keepUid);
+    m_status->setText(QString("Scanning… %1 series found so far — any of them can be opened now")
+                          .arg(m_series.size()));
 }
 
 void MainWindow::startThumbnails()
@@ -1437,6 +1527,7 @@ void MainWindow::applySeriesFilter()
     }
     if (filtering && matchesFound == 0) {
         auto* placeholder = new QListWidgetItem("(no matching series)");
+        placeholder->setData(Qt::UserRole, -1);         // not a series: nothing to select
         placeholder->setData(Qt::UserRole + 1, true);   // marks the row as the placeholder
         placeholder->setFlags(Qt::NoItemFlags);         // not selectable, not focusable
         placeholder->setForeground(palette().color(QPalette::Disabled, QPalette::Text));

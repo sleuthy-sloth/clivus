@@ -51,6 +51,13 @@ public:
     QString currentSeriesUid() const;
     // Test/introspection only: the Series Instance UID the annotation sidecar is keyed by.
     std::string seriesUidForTest() const { return currentSeriesUid().toStdString(); }
+    // The folder epoch a batch has to carry to be accepted, and the batch entry point itself. Exposed
+    // so the staleness rule can be tested without waiting on a real multi-second scan.
+    quint64 folderEpochForTest() const { return m_folderEpoch; }
+    void applyScanBatchForTest(quint64 epoch, std::vector<clivus::SeriesInfo> batch)
+    {
+        applyScanBatch(epoch, std::move(batch));
+    }
     int currentSliceForTest() const { return m_currentSlice; }
     int frameCountForTest() const
     {
@@ -123,6 +130,11 @@ private:
     void startScan();
     void updateScanProgress();
     void scanFinished();
+    // A snapshot of the series found so far, delivered while the scan is still running. Ignored when
+    // it belongs to a folder the user has already left.
+    void applyScanBatch(quint64 folderEpoch, std::vector<clivus::SeriesInfo> batch);
+    // Rebuilds the rows from m_series, keeping the row whose series UID is keepUid selected.
+    void rebuildSeriesRows(const QString& keepUid);
     void startThumbnails();
     void fillReadyThumbnails();
     void pumpSlice();
@@ -194,6 +206,7 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     QThreadPool m_foreground;
     QThreadPool m_prefetch;
     std::shared_ptr<clivus::ScanControl> m_scanControl;
+    quint64 m_folderEpoch = 0;   // bumped on every open: a batch from an older folder is stale
     QFutureWatcher<ScanResult>* m_scanWatcher = nullptr;
     QFutureWatcher<QImage>* m_thumbWatcher = nullptr;
     QFutureWatcher<SliceResult>* m_sliceWatcher = nullptr;

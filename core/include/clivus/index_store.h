@@ -67,7 +67,9 @@ private:
 };
 
 // scanDirectory(), but through the on-disk index: a second start on an unchanged folder parses no
-// DICOM headers at all.
-std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir, ScanControl* control = nullptr);
+// DICOM headers at all. A cache hit returns the whole list at once, so no progress is reported for it;
+// progress only describes a real walk.
+std::vector<SeriesInfo> scanDirectoryCached(const std::string& dir, ScanControl* control = nullptr,
+                                            const ScanProgress& progress = {});
 
 }  // namespace clivus
