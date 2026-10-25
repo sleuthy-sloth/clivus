@@ -19,7 +19,13 @@ Nothing to buy, and no toolchain needed on the Windows machine.
    .\clivus.exe .\corpus --bench 150
    ```
 
-That is the whole test: two minutes, no installs. Only two lines matter: the `GL …` renderer line and the
+   **Before the first run**, if the machine has never had Visual Studio or a VC++ app installed, Windows
+   will refuse to start `clivus.exe` with a missing `MSVCP140.dll` / `VCRUNTIME140.dll` dialog. The
+   package ships `vc_redist.x64.exe` for exactly this: run it once (a minute, needs admin) and the exe
+   starts. Windows 10/11 machines that already run other C++ applications usually have it.
+
+That is the whole test: two minutes, no toolchain to install (the VC++ runtime is the only thing that may
+need installing, and it is in the folder). Only two lines matter: the `GL …` renderer line and the
 `bench …` line. An ordinary laptop iGPU is a *better* answer than a virtual machine's virtual GPU,
 so a borrowed one is not a compromise.
 
