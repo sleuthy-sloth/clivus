@@ -76,6 +76,23 @@ decision it was written for. It needs a direct LUT check (scalar at the document
 `C - 0.5 - (W - 1)/2` maps to 0, at the upper bound maps to 255) rather than a
 whole-image tolerance, if that claim is to be tested at all.
 
+## Does the overlay test have teeth?
+
+`m_overlay = new OverlayWidget(...)` was commented out of the `CanvasWidget` constructor,
+the test rebuilt and run, then the file restored and rebuilt again.
+
+| Build | Result |
+|---|---|
+| Overlay child removed | `QOpenGLWidget is not supported on this platform.` then **Segmentation fault (exit 139)** |
+| Restored | `overlay_widget: 0 failure(s)`, exit 0 |
+
+So the test does not go green without the fix. It fails badly, though: it crashes instead
+of printing `FAIL the canvas has a canvasOverlay child`, so CI shows a segfault rather than
+the reason. The `overlay == nullptr` branch exists in `test_overlay_widget.cpp`; the crash
+happens before or around the `grab()` that follows, so that branch needs to be the thing
+that actually runs — `findChild` returns null and the early return prints, but the process
+still dies. Worth fixing before this test is trusted as a gate.
+
 ## NOT verified here
 
 - **The QVTK widgets do not compile on this host.** Debian's VTK 9.3 reports
