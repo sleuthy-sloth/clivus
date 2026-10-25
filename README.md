@@ -89,7 +89,9 @@ Real, working, test-backed:
 
 - **Browse a folder like a study** — series list with thumbnails and metadata lines,
   grouped under a patient and a study header so two patients whose series share a
-  description are no longer indistinguishable. A group header opens its first series.
+  description are no longer indistinguishable. Groups fold: click a header (or Left /
+  Right on it) and everything under it gets out of the way without closing the image you
+  are reading. A header still opens its first series on double-click.
 - **See series while the folder is still scanning.** Results arrive in batches as the
   walk proceeds, so a large nested folder shows something usable immediately instead
   of an empty pane until the last header is parsed. Cancel keeps what was found.
@@ -97,13 +99,16 @@ Real, working, test-backed:
   under the cursor stays under it. Zoom and pan survive slice changes and reset only
   on a series switch.
 - **Scroll the stack by dragging it.** Middle-drag scrubs slices; the wheel, the slice
-  bar and the arrow keys do the same through one coalesced decode path.
+  bar and the arrow keys do the same through one coalesced decode path. A frame that
+  finishes decoding after the wheel has moved on is dropped rather than flashed, so the
+  image on screen is always the slice you asked for.
 - **Read the pixel under the cursor.** Row/column, the stored value, the modality
   value, and a unit only when the object earns one: HU needs a rescale pair, RT Dose
   reads in Gy, and an object whose values came from a LUT reports no stored number
   rather than inventing one.
 - **Window/level with the Horos gesture.** Left-drag widens/centres; the maths is
-  the DICOM linear VOI LUT, not an approximation of it.
+  the DICOM linear VOI LUT, not an approximation of it. The window you choose stays
+  with you as you step through a series; it is reset by Reset View, not by every slice.
 - **Decode nearly everything's pixels — including colour.** Explicit-VR LE, RLE,
   JPEG, JPEG-LS, and JPEG 2000 where the DCMTK build carries it, plus RGB and
   YBR_FULL colour photometrics (planar variants converted by DCMTK, shown without
