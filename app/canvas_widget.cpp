@@ -99,11 +99,22 @@ void CanvasWidget::setFrame(clivus::ImageFrame frame)
     const bool keepView = frame.valid() && m_frame.valid() && frame.width == m_frame.width &&
                           frame.height == m_frame.height;
     // An invalid frame (series switch) is a slice change by definition: drop the slice's output.
+    const int previousWidth = m_frame.width;
+    const int previousHeight = m_frame.height;
+    const int previousChannels = m_frame.channels;
     setPixelSpacing(frame.pixelSpacingRow, frame.pixelSpacingCol);
     if (!sameSlice) clearMeasurements();
 
     m_frame = std::move(frame);
-    m_frame.fullWindow(m_center, m_width);
+    // Window/level is user state, not slice state (v0.4.1, radiology report: adjusting the window and
+    // then stepping one slice reset it to the frame's full range). The frame's metadata default belongs
+    // to the IMAGE, so it is applied only when the image changes identity: an invalid frame (showSeries()
+    // clears the canvas on a series switch) or a different matrix or channel count. Stepping through a
+    // series keeps whatever the user chose, however the frame arrived — in order, out of order, or
+    // re-decoded. resetView() is the explicit way back to the current frame's own default.
+    const bool newImage = !m_frame.valid() || m_frame.width != previousWidth ||
+                          m_frame.height != previousHeight || m_frame.channels != previousChannels;
+    if (newImage) m_frame.fullWindow(m_center, m_width);
     if (!keepView) {
         m_zoom = 1.0f;
         m_pan = QPointF(0, 0);

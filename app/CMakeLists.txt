@@ -148,6 +148,14 @@ target_link_libraries(clivus_test_scroll PRIVATE clivus_core Qt6::Widgets Qt6::O
 add_test(NAME scroll COMMAND clivus_test_scroll "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 set_tests_properties(scroll PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 300)
 
+# v0.4.1 window/level: the user's adjustment survives a slice step and a re-decode, and is re-derived
+# exactly at a series boundary or a different image matrix.
+qt_add_executable(clivus_test_window_level test_window_level.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_test_window_level PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    OpenGL::GL)
+add_test(NAME window_level COMMAND clivus_test_window_level)
+set_tests_properties(window_level PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_test(NAME dicomweb COMMAND clivus_test_dicomweb "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 
 qt_add_executable(clivus_test_server_dialog test_server_dialog.cpp server_dialog.cpp dicomweb_client.cpp)
