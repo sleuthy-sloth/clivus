@@ -29,7 +29,9 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QEvent>
+#include <QElapsedTimer>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPointer>
@@ -85,6 +87,36 @@ QImage thumbnailImage(const QString& file)
     // Qt keeps ownership of the buffer via the deleter, so copy the row bytes.
     QImage img(bytes.data(), frame.width, frame.height, frame.width * frame.channels, format);
     return img.copy().scaled(72, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+}
+
+}  // namespace
+
+// A group header carries the label twice: the text on screen (which includes the expand/collapse
+// chevron) and the plain label, so toggling can redraw the row without rebuilding it.
+inline constexpr int kGroupLabelRole = clivus::ui::kGroupKeyRole + 1;
+
+namespace {
+
+// The keys the collapse state is stored under. They are built from the identifiers the tree was
+// grouped by, so a rescan or a mid-scan batch produces the same keys and an expansion survives it.
+QString patientGroupKey(const std::string& patientKey)
+{
+    return QStringLiteral("P:") + QString::fromStdString(patientKey);
+}
+
+QString studyGroupKey(const std::string& patientKey, const std::string& studyUid)
+{
+    // U+001F (unit separator) cannot appear in a DICOM UID or a patient ID, so two studies under one
+    // patient can never collide on this key even when their descriptions match.
+    return QStringLiteral("S:") + QString::fromStdString(patientKey) + QChar(0x1f) +
+           QString::fromStdString(studyUid);
+}
+
+// The chevron is text, not an icon: it inherits the row's font and colour, scales with the UI text
+// size, and needs no resource file. It is the affordance that says "this row folds".
+QString groupRowText(bool collapsed, const QString& label)
+{
+    return (collapsed ? QStringLiteral("\u25B8 ") : QStringLiteral("\u25BE ")) + label;
 }
 
 }  // namespace
@@ -559,6 +591,10 @@ MainWindow::MainWindow(QWidget* parent)
     // the index it stands for. Without this, clicking the first row of a filtered list opened whichever
     // series happened to be index 0.
     connect(m_seriesList, &QListWidget::currentRowChanged, this, [this](int row) {
+        // A collapse moves the caret onto the header it just folded. That is a navigation move, not a
+        // request to open anything: without this the fold would start a decode of the group's first
+        // series and throw away the slice the user was reading.
+        if (m_suppressRowActivation) return;
         if (!m_seriesList || row < 0) { showSeries(-1); return; }
         const QListWidgetItem* item = m_seriesList->item(row);
         if (!item) { showSeries(-1); return; }
@@ -581,6 +617,11 @@ MainWindow::MainWindow(QWidget* parent)
         if (index.isValid() && m_seriesList->currentRow() != index.row())
             m_seriesList->setCurrentRow(index.row());
     });
+    // The viewport receives the mouse, so the fold gesture is watched there; the list receives the
+    // keys, so Left and Right can fold and unfold whatever header the caret is on. Neither path goes
+    // through the selection: folding a group must not start a decode.
+    m_seriesList->viewport()->installEventFilter(this);
+    m_seriesList->installEventFilter(this);
     connect(m_canvas, &CanvasWidget::scrollRequested, this, &MainWindow::showSlice);
     connect(m_sliceBar, &SliceBar::sliceRequested, this, &MainWindow::goToSlice);
     // The canvas is the one that changes values by dragging; it reports them here, this is where they
@@ -626,6 +667,34 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
             } else {
                 m_seriesList->setFocus();
             }
+            return true;
+        }
+    }
+    // A click on a group header folds or unfolds it, and does nothing else: the selection never moves,
+    // so the series on screen (and its slice) stays exactly where it was. Swallowing the press is what
+    // keeps QListWidget from making the header current, which would open the group's first series.
+    if (watched == m_seriesList->viewport() && event->type() == QEvent::MouseButtonPress) {
+        auto* mouse = static_cast<QMouseEvent*>(event);
+        if (mouse->button() == Qt::LeftButton) {
+            const QListWidgetItem* item = m_seriesList->itemAt(mouse->position().toPoint());
+            if (item && item->data(clivus::ui::kHeaderRole).toInt() != 0) {
+                toggleGroupCollapse(m_seriesList->row(item));
+                return true;
+            }
+        }
+    }
+    // Standard disclosure behaviour on the keyboard: Left folds the header under the caret, Right
+    // unfolds it. On a series row both keys fall through to QListWidget, so ordinary navigation is
+    // untouched.
+    if (watched == m_seriesList && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        const QListWidgetItem* item = m_seriesList->currentItem();
+        const bool onHeader = item && item->data(clivus::ui::kHeaderRole).toInt() != 0;
+        if (onHeader && (key->key() == Qt::Key_Left || key->key() == Qt::Key_Right)) {
+            const QString groupKey = item->data(clivus::ui::kGroupKeyRole).toString();
+            const bool collapsed = m_collapsedGroups.contains(groupKey);
+            const bool wantCollapsed = key->key() == Qt::Key_Left;
+            if (collapsed != wantCollapsed) toggleGroupCollapse(m_seriesList->row(item));
             return true;
         }
     }
@@ -1210,21 +1279,32 @@ void MainWindow::rebuildSeriesRows(const QString& keepUid)
         // "show me this".
         const clivus::ui::BrowserTree tree = clivus::ui::buildBrowserTree(m_series);
         for (const auto& patient : tree.patients) {
-            auto* header = new QListWidgetItem(patient.label, m_seriesList);
+            const QString patientKey = patientGroupKey(patient.patientKey);
+            const bool patientCollapsed = m_collapsedGroups.contains(patientKey);
+            auto* header = new QListWidgetItem(groupRowText(patientCollapsed, patient.label),
+                                               m_seriesList);
             // Selectable on purpose: Qt will not make a non-selectable item current, so a header that
             // could not be selected could not open its first series either. The selection handler
-            // treats the header as "show me this group".
+            // treats the header as "show me this group"; folding is the mouse/keyboard path (see
+            // eventFilter) and deliberately does not move the selection.
             header->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
             header->setData(Qt::UserRole, -1);
             header->setData(clivus::ui::kHeaderRole, int(clivus::ui::HeaderKind::Patient));
+            header->setData(clivus::ui::kGroupKeyRole, patientKey);
+            header->setData(kGroupLabelRole, patient.label);
             for (const auto& study : patient.studies) {
                 QString studyText = study.label;
                 if (study.series.size() > 1)
                     studyText += QStringLiteral("  (%1 series)").arg(study.series.size());
-                auto* studyHeader = new QListWidgetItem("    " + studyText, m_seriesList);
+                const QString studyKey = studyGroupKey(patient.patientKey, study.studyUid);
+                const bool studyCollapsed = m_collapsedGroups.contains(studyKey);
+                auto* studyHeader = new QListWidgetItem(
+                    groupRowText(studyCollapsed, QStringLiteral("    ") + studyText), m_seriesList);
                 studyHeader->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
                 studyHeader->setData(Qt::UserRole, -1);
                 studyHeader->setData(clivus::ui::kHeaderRole, int(clivus::ui::HeaderKind::Study));
+                studyHeader->setData(clivus::ui::kGroupKeyRole, studyKey);
+                studyHeader->setData(kGroupLabelRole, QStringLiteral("    ") + studyText);
                 for (const auto& entry : study.series) {
                     auto* item = new QListWidgetItem(clivus::ui::seriesLabel(m_series[size_t(entry.seriesIndex)]),
                                                      m_seriesList);
@@ -1240,14 +1320,19 @@ void MainWindow::rebuildSeriesRows(const QString& keepUid)
     }
 
     int row = -1;
+    bool keptHidden = false;
     if (!keepUid.isEmpty()) {
         for (int i = 0; i < m_seriesList->count(); ++i) {
             const QListWidgetItem* item = m_seriesList->item(i);
-            if (!item || item->isHidden()) continue;
+            if (!item) continue;
             const int index = item->data(Qt::UserRole).toInt();
             if (index >= 0 && index < int(m_series.size()) &&
                 QString::fromStdString(m_series[size_t(index)].seriesUid) == keepUid) {
                 row = i;
+                // A rebuild must not unfold a group the user folded, and must not lose the caret
+                // because the row it stands on is hidden: both would move the user's attention (and,
+                // through the selection handler, start a decode they did not ask for).
+                keptHidden = item->isHidden();
                 break;
             }
         }
@@ -1258,7 +1343,17 @@ void MainWindow::rebuildSeriesRows(const QString& keepUid)
             if (item && !item->isHidden() && item->data(Qt::UserRole).toInt() >= 0) { row = i; break; }
         }
     }
-    if (row >= 0) m_seriesList->setCurrentRow(row);
+    if (row >= 0) {
+        const QListWidgetItem* item = m_seriesList->item(row);
+        const int mapped = item ? item->data(Qt::UserRole).toInt() : -2;
+        // A rebuild is not a navigation: when the row it restores is the series already open (or the
+        // row it restores is hidden inside a folded group), the handler must not re-run showSeries().
+        // That would drop the slice being read and decode slice 0 again on every scan batch. A click
+        // from the user still goes through the handler untouched, because it does not come from here.
+        m_suppressRowActivation = keptHidden || (mapped >= 0 && mapped == m_currentSeries);
+        m_seriesList->setCurrentRow(row);
+        m_suppressRowActivation = false;
+    }
 }
 
 int MainWindow::rowForSeriesIndex(int seriesIndex) const
@@ -1346,10 +1441,15 @@ void MainWindow::pumpSlice()
     if (!m_sliceInFlight && m_currentSeries >= 0 && m_prefetchFrame.valid() &&
         m_prefetchIndex == m_desiredSlice && m_failedSlice != m_desiredSlice) {
         m_prefetchIndex = -1;
+        ++m_scrollStats.prefetchServed;
         presentSlice(m_desiredSlice, std::move(m_prefetchFrame));
         return;
     }
     if (m_sliceInFlight || m_currentSeries < 0 || m_desiredSlice < 0) return;
+    // The speculative pool may already be fetching exactly this slice. Starting a second decode of it on
+    // the foreground pool was pure waste — two reads of the same file, and the second one lands after the
+    // first has already been presented — so wait for that one instead.
+    if (m_prefetchIndex == m_desiredSlice && m_prefetchWatcher->isRunning()) return;
     // Roadmap 3.5: a slice that already failed is not retried on its own — that would spin the
     // decode pool (pump → fail → pump) on a permanently broken file. The failure is cleared only
     // when the user picks a slice that previously succeeded, i.e. by moving away first.
@@ -1400,6 +1500,14 @@ void MainWindow::sliceFinished()
         if (m_desiredSlice != r.index) pumpSlice();
         return;
     }
+    // A decoded frame that is no longer what the wheel points at is NOT presented. Presenting it flashed
+    // a slice the user had already scrolled away from — one repaint of the wrong image, then another of
+    // the right one — which is the stutter the report describes. The pump is restarted for the slice that
+    // is current now; what is presented is always the frame it says it is, so nothing is mislabelled.
+    if (r.index != m_desiredSlice) {
+        pumpSlice();
+        return;
+    }
     presentSlice(r.index, std::move(r.frame));
 }
 
@@ -1410,6 +1518,14 @@ void MainWindow::sliceFinished()
 void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
 {
     if (m_currentSeries < 0) return;
+    ++m_scrollStats.presents;
+    m_presentedSlices.push_back(index);
+    if (index == m_desiredSlice) {
+        if (m_requestClock.isValid())
+            m_scrollStats.latencyMs.push_back(double(m_requestClock.nsecsElapsed()) / 1e6);
+    } else {
+        ++m_scrollStats.stalePresents;
+    }
     m_currentSlice = index;
     m_currentIsColour = frame.isColour();
     // Colour frames ignore the window (render() passes their samples through), so the fields stay
@@ -1441,6 +1557,7 @@ void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
         int fileIndex = 0, frameIndex = 0;
         if (series.locate(ahead, fileIndex, frameIndex)) {
             m_prefetchIndex = ahead;
+            ++m_scrollStats.prefetchStarts;
             const std::string path = series.files[size_t(fileIndex)];
             const quint64 epoch = m_epoch;
             m_prefetchWatcher->setFuture(QtConcurrent::run(&m_prefetch, [path, epoch, frameIndex] {
@@ -1468,9 +1585,13 @@ void MainWindow::onPrefetchLanded()
     }
     if (frame.valid()) {
         m_prefetchFrame = std::move(frame);   // parked: the pump serves it when the wheel arrives
+        // The wheel may have moved past this frame while it was decoding: the slice it points at now
+        // still needs its own decode, and nothing else would start it.
+        pumpSlice();
         return;
     }
     m_prefetchIndex = -1;   // a failed or stale prefetch: nothing parked
+    pumpSlice();            // and the target still needs its own decode
 }
 
 void MainWindow::cancelLoading()
@@ -1646,6 +1767,9 @@ void MainWindow::applySeriesFilter()
         closePatient();
     }
 
+    // Fold state on top of the query result: same writer, so the two can never disagree.
+    applyCollapseState(filtering);
+
     if (filtering && matchesFound == 0) {
         auto* placeholder = new QListWidgetItem("(no matching series)");
         placeholder->setData(Qt::UserRole, -1);         // not a series: nothing to select
@@ -1655,13 +1779,115 @@ void MainWindow::applySeriesFilter()
         m_seriesList->insertItem(0, placeholder);
     }
     // The selection stays visible when it matches: setCurrentItem on a hidden item would jump
-    // elsewhere, so only re-anchor when the current row has been hidden away.
-    if (current && current->isHidden() && matchesFound > 0) {
+    // elsewhere, so only re-anchor when a *query* has hidden the current row. A fold is not a query:
+    // it moves the caret to the header itself (see toggleGroupCollapse) and leaves this alone.
+    if (filtering && current && current->isHidden() && matchesFound > 0) {
         for (int i = 0; i < m_seriesList->count(); ++i) {
             QListWidgetItem* item = m_seriesList->item(i);
             if (item && !item->isHidden()) { m_seriesList->setCurrentItem(item); break; }
         }
     }
+}
+
+// Folds or unfolds one group. Returns false when the row is not a group header, so both the mouse and
+// the keyboard have one rule and a test can drive the same entry point.
+//
+// The identity of the group is the vendor-neutral key the model already carries (kGroupKeyRole), not
+// the row number: a scan batch rebuilds every row, and a label can be shared by two patients.
+bool MainWindow::toggleGroupCollapse(int row)
+{
+    if (!m_seriesList || row < 0 || row >= m_seriesList->count()) return false;
+    QListWidgetItem* item = m_seriesList->item(row);
+    if (!item) return false;
+    if (clivus::ui::HeaderKind(item->data(clivus::ui::kHeaderRole).toInt()) ==
+        clivus::ui::HeaderKind::None)
+        return false;
+    const QString key = item->data(clivus::ui::kGroupKeyRole).toString();
+    if (key.isEmpty()) return false;
+
+    bool nowCollapsed = false;
+    if (m_collapsedGroups.contains(key)) {
+        m_collapsedGroups.remove(key);
+    } else {
+        m_collapsedGroups.insert(key);
+        nowCollapsed = true;
+    }
+
+    applySeriesFilter();   // the single writer of visibility re-applies the fold
+
+    // Folding the group that holds the series on screen keeps showing that series: collapsing a group
+    // is navigation, not closing a study. The caret moves to the header, with activation suppressed, so
+    // no decode and no slice reset happen.
+    const QListWidgetItem* current = m_seriesList->currentItem();
+    if (nowCollapsed && current && current->isHidden()) {
+        m_suppressRowActivation = true;
+        m_seriesList->setCurrentRow(row);
+        m_suppressRowActivation = false;
+    }
+    return true;
+}
+
+// The fold half of the single visibility writer (see applySeriesFilter's comment). Runs after the
+// query pass, so it can never make a header look empty: a group header stays on screen whenever it has
+// a series at all; only its children are hidden.
+//
+// While a query is active the groups are shown open. A search that finds a series inside a folded
+// study and then hides it would be a worse bug than the one this fixes; the fold state is kept, so
+// clearing the query puts the folded groups back exactly as they were.
+void MainWindow::applyCollapseState(bool filtering)
+{
+    const bool folding = !filtering;
+    bool patientCollapsed = false;
+    bool studyCollapsed = false;
+    for (int i = 0; i < m_seriesList->count(); ++i) {
+        QListWidgetItem* item = m_seriesList->item(i);
+        if (!item) continue;
+        const auto kind = clivus::ui::HeaderKind(item->data(clivus::ui::kHeaderRole).toInt());
+        if (kind == clivus::ui::HeaderKind::Patient) {
+            const QString key = item->data(clivus::ui::kGroupKeyRole).toString();
+            patientCollapsed = folding && m_collapsedGroups.contains(key);
+            studyCollapsed = false;
+            item->setText(groupRowText(patientCollapsed, item->data(kGroupLabelRole).toString()));
+            continue;
+        }
+        if (kind == clivus::ui::HeaderKind::Study) {
+            // Inside a folded patient everything below the patient header is out of the way, including
+            // the study headers — but their own fold state is untouched and comes back on unfold.
+            if (patientCollapsed) {
+                item->setHidden(true);
+                continue;
+            }
+            const QString key = item->data(clivus::ui::kGroupKeyRole).toString();
+            studyCollapsed = folding && m_collapsedGroups.contains(key);
+            item->setText(groupRowText(studyCollapsed, item->data(kGroupLabelRole).toString()));
+            continue;
+        }
+        if (item->data(Qt::UserRole + 1).toBool()) continue;   // the placeholder
+        if (item->data(Qt::UserRole).toInt() < 0) continue;    // not a series row
+        if (patientCollapsed || studyCollapsed) item->setHidden(true);
+    }
+}
+
+bool MainWindow::rowIsGroupHeaderForTest(int row) const
+{
+    if (!m_seriesList || row < 0 || row >= m_seriesList->count()) return false;
+    const QListWidgetItem* item = m_seriesList->item(row);
+    return item && item->data(clivus::ui::kHeaderRole).toInt() != 0;
+}
+
+QString MainWindow::groupKeyAtRowForTest(int row) const
+{
+    if (!m_seriesList || row < 0 || row >= m_seriesList->count()) return QString();
+    const QListWidgetItem* item = m_seriesList->item(row);
+    return item ? item->data(clivus::ui::kGroupKeyRole).toString() : QString();
+}
+
+// Test seam: the counters describe one scroll run, so a test clears them between runs.
+void MainWindow::resetScrollStatsForTest()
+{
+    m_scrollStats = ScrollStats{};
+    m_presentedSlices.clear();
+    m_requestClock.invalidate();
 }
 
 void MainWindow::showSeries(int index)
@@ -1709,13 +1935,17 @@ void MainWindow::showSlice(int delta)
     const int total = series.totalFrames();
     if (total <= 0) return;   // clamp() would give an upper bound of -1 here
     // Step from where the wheel last pointed, not from what is on screen, so a fast spin does not
-    // keep restarting from the same slice.
-    const int from = std::max(m_sliceInFlight ? m_desiredSlice : m_currentSlice, 0);
+    // keep restarting from the same slice. The target is the right base even when nothing is in flight:
+    // a step can be waiting on the prefetch pool without a decode of its own, and measuring from the
+    // displayed slice would then drop every second notch of a fast spin.
+    const int from = std::max(m_desiredSlice >= 0 ? m_desiredSlice : m_currentSlice, 0);
     const int next = std::clamp(from + delta, 0, total - 1);
     if (next == m_desiredSlice && (m_sliceInFlight || next == m_currentSlice)) return;
-    m_lastStep = next > (m_sliceInFlight ? m_desiredSlice : m_currentSlice);
+    m_lastStep = next > from;
     m_hasStep = true;
     m_desiredSlice = next;
+    ++m_scrollStats.requests;
+    m_requestClock.start();   // latency is measured from the last slice the user asked for
     // The slider follows the slice the wheel is aiming at, not the one still decoding: during a fast
     // spin the strip and the decode pump both chase the same target, and the pump decides when the
     // decode happens, so this cannot outrun the coalescing in pumpSlice().
@@ -1735,6 +1965,8 @@ void MainWindow::goToSlice(int index)
     const int target = std::clamp(index, 0, total - 1);
     if (target == m_desiredSlice && (m_sliceInFlight || target == m_currentSlice)) return;
     m_desiredSlice = target;
+    ++m_scrollStats.requests;
+    m_requestClock.start();
     pumpSlice();
     if (!m_sliceInFlight) updateInfo();
 }

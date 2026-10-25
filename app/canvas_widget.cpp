@@ -19,17 +19,24 @@ namespace {
 
 // Overlay and measurement text follow the widget's own font instead of a fixed 10 pt. On a machine
 // with larger UI text, the series description and slice position were then the smallest thing on
-// screen — the opposite of what they are for. Clamped so a very large system font cannot swamp the
-// image it is drawn over.
+// screen — the opposite of what they are for. The floor is 10 pt rather than 8: a radiology report
+// photographed two lines of 8 pt text over a dark image and they were unreadable, and the corner block
+// is read at a glance across a room, not studied. The ceiling (18 pt) keeps a very large system font
+// from swamping the image it is drawn over.
 QFont overlayFont(const QFont& base)
 {
     QFont font = base;
-    const double size = font.pointSizeF() > 0.0 ? font.pointSizeF() : 9.0;
-    font.setPointSizeF(std::clamp(size, 8.0, 16.0));
+    const double size = font.pointSizeF() > 0.0 ? font.pointSizeF() : 10.0;
+    font.setPointSizeF(std::clamp(size, 10.0, 18.0));
     return font;
 }
 
 }  // namespace
+
+QFont CanvasWidget::overlayTextFont() const
+{
+    return overlayFont(font());
+}
 
 CanvasWidget::CanvasWidget(QWidget* parent)
     : QOpenGLWidget(parent)
@@ -99,11 +106,22 @@ void CanvasWidget::setFrame(clivus::ImageFrame frame)
     const bool keepView = frame.valid() && m_frame.valid() && frame.width == m_frame.width &&
                           frame.height == m_frame.height;
     // An invalid frame (series switch) is a slice change by definition: drop the slice's output.
+    const int previousWidth = m_frame.width;
+    const int previousHeight = m_frame.height;
+    const int previousChannels = m_frame.channels;
     setPixelSpacing(frame.pixelSpacingRow, frame.pixelSpacingCol);
     if (!sameSlice) clearMeasurements();
 
     m_frame = std::move(frame);
-    m_frame.fullWindow(m_center, m_width);
+    // Window/level is user state, not slice state (v0.4.1, radiology report: adjusting the window and
+    // then stepping one slice reset it to the frame's full range). The frame's metadata default belongs
+    // to the IMAGE, so it is applied only when the image changes identity: an invalid frame (showSeries()
+    // clears the canvas on a series switch) or a different matrix or channel count. Stepping through a
+    // series keeps whatever the user chose, however the frame arrived — in order, out of order, or
+    // re-decoded. resetView() is the explicit way back to the current frame's own default.
+    const bool newImage = !m_frame.valid() || m_frame.width != previousWidth ||
+                          m_frame.height != previousHeight || m_frame.channels != previousChannels;
+    if (newImage) m_frame.fullWindow(m_center, m_width);
     if (!keepView) {
         m_zoom = 1.0f;
         m_pan = QPointF(0, 0);
@@ -220,7 +238,7 @@ double CanvasWidget::angleDeg(QPointF p1, QPointF p2, QPointF p3) const
 // can be checked without a GL context.
 void CanvasWidget::paintOverlays(QPainter& painter) const
 {
-    painter.setFont(overlayFont(font()));
+    painter.setFont(overlayTextFont());
     drawMeasurements(painter);
     drawRois(painter);
     // The pen is set here, not inherited. The left block used to be drawn with whatever pen the
@@ -229,22 +247,62 @@ void CanvasWidget::paintOverlays(QPainter& painter) const
     // hold it off a bright image.
     const QColor text(0xe6, 0xe6, 0xe6, 230);
     const QColor shadow(0, 0, 0, 160);   // enough contrast on any image, still plain
-    const int pad = 8;
-    const auto drawCorner = [&](const QString& block, Qt::Alignment align) {
-        const QRect bounds = painter.boundingRect(
-            QRect(pad, pad, width() - 2 * pad, 200), align | Qt::TextWordWrap, block);
+    // Each block is laid out ONCE, in the rectangle it is drawn into, and the shadow is the same text
+    // translated by one pixel. The previous version measured the text with word wrap and then drew it
+    // into its own measured box: the second pass re-wrapped at a narrower width, so the lines on screen
+    // were not the lines that were measured and got clipped by the box they were re-wrapped into.
+    const auto [leftArea, rightArea] = overlayCornerAreas();
+    const auto drawCorner = [&](const QString& block, Qt::Alignment align, const QRect& area) {
+        if (block.isEmpty() || area.isEmpty()) return;
+        // A backing plate behind the text, sized to the text and never to the whole corner: light grey
+        // over a dark image (or a bright one) is the other half of "the text is unreadable", and a photo
+        // of the running app is what showed it. The measurement labels have had one for the same reason.
+        const QRect textRect = painter.boundingRect(area, align | Qt::TextWordWrap, block);
+        if (!textRect.isEmpty()) {
+            painter.fillRect(textRect.adjusted(-6, -4, 6, 4), QColor(0, 0, 0, 140));
+        }
+        painter.save();
         painter.setPen(shadow);
-        painter.drawText(bounds.translated(1, 1), align, block);
+        painter.translate(1, 1);
+        painter.drawText(area, align | Qt::TextWordWrap, block);
+        painter.restore();
         painter.setPen(text);
-        painter.drawText(bounds, align, block);
+        painter.drawText(area, align | Qt::TextWordWrap, block);
     };
-    if (!m_overlayLeft.isEmpty()) drawCorner(m_overlayLeft, Qt::AlignLeft | Qt::AlignTop);
-    if (!m_overlayRight.isEmpty()) drawCorner(m_overlayRight, Qt::AlignRight | Qt::AlignTop);
+    drawCorner(m_overlayLeft, Qt::AlignLeft | Qt::AlignTop, leftArea);
+    drawCorner(m_overlayRight, Qt::AlignRight | Qt::AlignTop, rightArea);
+}
+
+// Where the two corner blocks live. They used to be handed the SAME rectangle — the full width of the
+// canvas — so a long series description drew straight underneath the window/level block and the two
+// read as one smear of overlapping glyphs. Half each keeps them apart at every width; the height is
+// bounded so a pathological description cannot cover the image, but never so tight that a wrapped one
+// is cut off.
+std::pair<QRect, QRect> CanvasWidget::overlayCornerAreas() const
+{
+    const int pad = 8;
+    const QRect viewport = rect().adjusted(pad, pad, -pad, -pad);
+    if (viewport.width() <= 0 || viewport.height() <= 0) return {QRect(), QRect()};
+    const int half = std::max(24, viewport.width() / 2);
+    const int height = std::max(24, std::min(viewport.height(), viewport.height() / 2));
+    const QRect left(viewport.left(), viewport.top(), half, height);
+    const QRect right(viewport.right() - half + 1, viewport.top(), half, height);
+    return {left, right};
+}
+
+QRect CanvasWidget::overlayLeftArea() const
+{
+    return overlayCornerAreas().first;
+}
+
+QRect CanvasWidget::overlayRightArea() const
+{
+    return overlayCornerAreas().second;
 }
 
 void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& text) const
 {
-    p.setFont(overlayFont(font()));
+    p.setFont(overlayTextFont());
     const QRect r = measurementLabelRect(at, text);
     p.fillRect(r.adjusted(-3, -3, 3, 3), QColor(0, 0, 0, 160));   // backing: readable on any image
     p.setPen(QPen(clivus::style::accent().darker(115), 1.0));
@@ -256,7 +314,7 @@ void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& t
 // and the number disappears. Exposed so the rule can be tested without a GL context.
 QRect CanvasWidget::measurementLabelRect(QPointF at, const QString& text) const
 {
-    const QFont font = overlayFont(this->font());
+    const QFont font = overlayTextFont();
     const QRect bounds = QFontMetrics(font).boundingRect(QRect(0, 0, 1000, 1000), 0, text);
     QRect r = bounds.translated(int(at.x()) + 6, int(at.y()) - bounds.height() - 6);
     const QRect viewport = rect().adjusted(2, 2, -2, -2);

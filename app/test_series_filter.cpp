@@ -125,8 +125,10 @@ int main(int argc, char** argv)
     CHECK(visibleCount(list) == total);
     for (int i = 0; i < list->count(); ++i) CHECK(!list->item(i)->isHidden());
 
-    // 4. Selection stays visible when it matches: select a row, filter to its text, it stays.
-    list->setCurrentRow(std::min(1, total - 1));
+    // 4. Selection stays visible when it matches: select a series row, filter to its text, it stays.
+    // A series row, not row 1: row 1 is a group header, and its label carries the fold chevron plus the
+    // study description, so a text prefix from it would not name a series at all.
+    list->setCurrentRow(firstSeriesRow);
     QListWidgetItem* selected = list->currentItem();
     search->setText(selected->text().section('\n', 0, 0).left(6));   // description prefix
     CHECK(list->currentItem() == selected);

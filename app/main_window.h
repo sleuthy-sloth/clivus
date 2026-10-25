@@ -2,6 +2,7 @@
 #pragma once
 #include <QFutureWatcher>
 #include <QMainWindow>
+#include <QSet>
 
 class QTimer;
 #include <QTimer>
@@ -102,6 +103,29 @@ public:
     bool hasSeriesForCapture() const { return m_canvas != nullptr && !m_series.empty(); }
     void openMprForTest() { openMprView(); }
 
+    // Browser groups: collapse and expand through the same entry points the mouse and the keyboard
+    // use, so a test drives the real path instead of a copy of the rule. A row that is not a group
+    // header is not a toggle target and these refuse it.
+    bool toggleGroupAtRowForTest(int row) { return toggleGroupCollapse(row); }
+    bool rowIsGroupHeaderForTest(int row) const;
+    QString groupKeyAtRowForTest(int row) const;
+
+    // Scroll scheduling, made observable (v0.4.1, radiology report: "scrolling through the stack feels
+    // jerky"). A jerk is not a number, so these are: how many targets were asked for, how many frames
+    // reached the canvas, how many of those were not the slice the wheel was pointing at any more, and
+    // how often a slice was decoded twice because the prefetch and the request path both asked for it.
+    struct ScrollStats {
+        int requests = 0;
+        int presents = 0;
+        int stalePresents = 0;      // decoded a slice the wheel had already moved past
+        int prefetchStarts = 0;
+        int prefetchServed = 0;     // presented straight from the speculative slot
+        std::vector<double> latencyMs;   // request -> present, for the targets that were shown
+    };
+    const ScrollStats& scrollStatsForTest() const { return m_scrollStats; }
+    const std::vector<int>& presentedSlicesForTest() const { return m_presentedSlices; }
+    void resetScrollStatsForTest();
+
 protected:
     void closeEvent(QCloseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;   // drop a folder or DICOM file anywhere
@@ -155,9 +179,21 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     void restoreLayout();  // roadmap 3.1: guarded restore with built-in fallbacks
     void resetLayout();    // roadmap 3.1: View ▸ Reset Layout back to the built-in default
     void applySeriesFilter();   // roadmap 3.2: hide/show rows from the search text
+    // Collapse state of the browser's groups. Keyed by the identifiers the model already validated
+    // (clivus::ui::kGroupKeyRole), never by row number or label: every scan batch rebuilds the rows,
+    // and two patients can share a name.
+    bool toggleGroupCollapse(int row);
+    void applyCollapseState(bool filtering);
 
     QLineEdit* m_seriesSearch = nullptr;   // roadmap 3.2: filters the list by description/modality
     QListWidget* m_seriesList = nullptr;
+    // v0.4.1: a folder of studies is a tree on screen now. A collapsed patient hides its studies and
+    // series; a collapsed study hides its series. Expanded is the default, so nothing a 0.4.0 user
+    // learned changes until they ask for it.
+    QSet<QString> m_collapsedGroups;
+    // Moving the caret onto a header is how the mouse collapses a group; it must not also re-open that
+    // group's first series, so the selection handler stays quiet for exactly that one move.
+    bool m_suppressRowActivation = false;
     QSplitter* m_splitter = nullptr;
     QStackedWidget* m_centralStack = nullptr;
     QWidget* m_emptyState = nullptr;
@@ -225,6 +261,11 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     clivus::ImageFrame m_prefetchFrame;   // the parked, still-unpresented neighbour frame
     int m_prefetchIndex = -1;             // which slice the parked frame (or the in-flight one) is
     bool m_sliceInFlight = false;
+    // Scroll scheduling measurement, and the monotonic clock the latency is measured against. Both are
+    // read by the scroll test; nothing in the product depends on them.
+    ScrollStats m_scrollStats;
+    std::vector<int> m_presentedSlices;
+    QElapsedTimer m_requestClock;
     int m_benchFrames = 0;     // pending --bench request, honoured once the first slice is on screen
     int m_benchRow = 0;
 };

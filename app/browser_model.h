@@ -31,6 +31,11 @@ namespace clivus::ui {
 // Item-data roles the browser rows use. The series index lives in Qt::UserRole, so the marks that
 // distinguish "group header" from "placeholder" sit beside it.
 inline constexpr int kHeaderRole = Qt::UserRole + 2;
+// A group header also carries the identifier the collapse state is keyed by: the patient key for a
+// patient header, the patient key and study UID joined for a study header. Row numbers and display
+// text are never used for this — a new scan batch rebuilds every row, and a label can be duplicated
+// by two patients with the same name.
+inline constexpr int kGroupKeyRole = Qt::UserRole + 3;
 
 enum class HeaderKind { None = 0, Patient, Study };
 

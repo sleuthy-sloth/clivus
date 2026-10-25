@@ -118,6 +118,50 @@ target_link_libraries(clivus_test_export PRIVATE clivus_core Qt6::Widgets Qt6::C
 add_test(NAME export COMMAND clivus_test_export "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 set_tests_properties(export PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# v0.4.1 browser groups: folding and unfolding a patient or study, and everything that has to keep
+# working around it (selection, scan batches, the query, the empty folder).
+qt_add_executable(clivus_test_browser_groups test_browser_groups.cpp main_window.cpp browser_model.cpp
+    series_summary.cpp deid_dialog.cpp export_images.cpp mpr_view.cpp annotation_store.cpp
+    server_dialog.cpp dicomweb_client.cpp branding.cpp about_dialog.cpp help_window.cpp
+    canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_browser_groups PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    Qt6::Concurrent Qt6::Network OpenGL::GL)
+add_test(NAME browser_groups COMMAND clivus_test_browser_groups "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(browser_groups PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# v0.4.1 overlay layout: the corner blocks get half the canvas each and are laid out once, in the
+# rectangle they are drawn into, so a long description cannot run under the window/level block.
+qt_add_executable(clivus_test_overlay_layout test_overlay_layout.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_test_overlay_layout PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    OpenGL::GL)
+add_test(NAME overlay_layout COMMAND clivus_test_overlay_layout)
+set_tests_properties(overlay_layout PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Not a test: paints the same overlay into a PNG so the contrast/size rules can be looked at, and so
+# docs/images can be regenerated instead of hand-made. See docs/UNIT-6-EVIDENCE.md.
+qt_add_executable(clivus_overlay_preview overlay_preview.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_overlay_preview PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    OpenGL::GL)
+
+# v0.4.1 scroll scheduling: burst, prefetch overlap, direction change and a sequential walk, with the
+# request -> present numbers printed so the report can quote them instead of an impression.
+qt_add_executable(clivus_test_scroll test_scroll.cpp main_window.cpp browser_model.cpp
+    series_summary.cpp deid_dialog.cpp export_images.cpp mpr_view.cpp annotation_store.cpp
+    server_dialog.cpp dicomweb_client.cpp branding.cpp about_dialog.cpp help_window.cpp
+    canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_scroll PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    Qt6::Concurrent Qt6::Network OpenGL::GL)
+add_test(NAME scroll COMMAND clivus_test_scroll "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(scroll PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 300)
+
+# v0.4.1 window/level: the user's adjustment survives a slice step and a re-decode, and is re-derived
+# exactly at a series boundary or a different image matrix.
+qt_add_executable(clivus_test_window_level test_window_level.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_test_window_level PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    OpenGL::GL)
+add_test(NAME window_level COMMAND clivus_test_window_level)
+set_tests_properties(window_level PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_test(NAME dicomweb COMMAND clivus_test_dicomweb "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 
 qt_add_executable(clivus_test_server_dialog test_server_dialog.cpp server_dialog.cpp dicomweb_client.cpp)
