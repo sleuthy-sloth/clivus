@@ -129,3 +129,47 @@ workstation, which is the only place the reporter's complaint can actually be ju
   timing-sensitive; a slow runner can still make it flaky.
 - **The fold gesture on macOS/Windows.** Verified through `QMouseEvent` delivery to the viewport under
   the offscreen platform, not by a human clicking on a real desktop.
+
+## Follow-up: overlay legibility (after two photos of the running app)
+
+Two photographs of a monitor arrived after the first pass. Local OCR of the corner block (tesseract,
+after the vision provider returned 402 Insufficient Balance) read:
+
+    WC S292  WAN SEES   tog
+    Wiasicw S88 ms | gaint S44 ms { 86 fas
+
+which is OCR slop on `WC <n> … WW <n>` and `window <n> ms | paint <n> ms | <n> fps` — numbers in the
+right places, no `Â·`/`Ã`/`�` signatures, so not an encoding fault. In the second photo the "garbled cyan
+text" in the centre of the canvas is a diagonal glare band: the cyan mask (6,390 pixels, bbox
+x 250-620 / y 393-627) has no word-shaped structure, and the application draws no cyan anywhere.
+
+What the photos did establish is that the corner text is hard to read in practice. Two changes:
+
+- **Text floor raised from 8 pt to 10 pt** (ceiling 16 → 18 pt). The block is read at a glance, not
+  studied, and 8 pt grey-on-image is what the photo showed.
+- **A backing plate behind each block**, sized to the measured text and never to the corner, at
+  `QColor(0,0,0,140)`: the same device the measurement labels already used.
+
+Measured on `docs/img/overlay-legibility-{before,after}.png` (same overlay text, widget font forced to
+6 pt so the floor is visible, mid-grey 0x9a background, WCAG relative luminance over the left block):
+
+| | text size | glyph/background contrast |
+| --- | --- | --- |
+| before | 8 pt | 1.84:1 |
+| after | 10 pt | 6.09:1 |
+
+Both images are produced by `clivus_overlay_preview` (a build target, not a test) from the same
+`paintOverlays()` the canvas calls; no GL context, no hand-made mockup. At a widget font of 10 pt or
+larger the floor is a no-op and only the plate changes — claimed nothing else.
+
+Fails without the change:
+
+```
+FAIL the overlay font never drops below 10 pt
+FAIL the left block darkens its own text area
+FAIL the right block darkens its own text area
+```
+
+Still not verified: this is a legibility improvement, not a reproduction of the reported symptom. The
+two questions from the section above stand — which text, and whether the characters are wrong or the
+layout is.

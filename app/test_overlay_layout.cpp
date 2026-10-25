@@ -21,6 +21,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QRect>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -67,6 +68,34 @@ int brightRows(const QImage& image, const QRect& area)
 
 // The canvas is sized here and only here: the corner areas are computed from the widget's own rect, so
 // measuring them before the resize would test the areas of a different window.
+// Mean luminance of a region: used to prove the backing plate is there, which a bright-pixel count
+// cannot show on a light background.
+double meanLuminance(const QImage& image, const QRect& area)
+{
+    const QRect r = area.intersected(image.rect());
+    if (r.isEmpty()) return 0.0;
+    double sum = 0.0;
+    for (int y = r.top(); y <= r.bottom(); ++y)
+        for (int x = r.left(); x <= r.right(); ++x) {
+            const QColor c = image.pixelColor(x, y);
+            sum += 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue();
+        }
+    return sum / double(r.width() * r.height());
+}
+
+// The rect a corner block is laid out in, computed the same way paintOverlays() does it. The backing
+// plate is sized to this rect, so a test has to know it to check the plate.
+QRect blockTextRect(const CanvasWidget& canvas, const QRect& area, Qt::Alignment align,
+                    const QString& text)
+{
+    QImage probe(4, 4, QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&probe);
+    painter.setFont(canvas.overlayTextFont());
+    const QRect r = painter.boundingRect(area, align | Qt::TextWordWrap, text);
+    painter.end();
+    return r;
+}
+
 QImage render(CanvasWidget& canvas, int w, int h)
 {
     canvas.resize(w, h);
@@ -144,6 +173,55 @@ int main(int argc, char** argv)
         empty.setOverlay(QString(), QString());
         const QImage image = render(empty, 800, 600);
         expect(brightPixels(image, empty.rect()) == 0, "no overlay text means no overlay ink");
+    }
+
+    // 6. Legibility floor and ceiling: the corner text is read at a glance, so a tiny system font does
+    // not shrink it below 10 pt, and a huge one does not take over the image above 18 pt.
+    {
+        CanvasWidget small;
+        QFont tiny = small.font();
+        tiny.setPointSizeF(4.0);
+        small.setFont(tiny);
+        expect(small.overlayTextFont().pointSizeF() >= 10.0,
+               "the overlay font never drops below 10 pt");
+        expect(small.overlayTextFont().pointSizeF() <= 18.0,
+               "the overlay font never exceeds 18 pt");
+
+        CanvasWidget large;
+        QFont huge = large.font();
+        huge.setPointSizeF(40.0);
+        large.setFont(huge);
+        expect(large.overlayTextFont().pointSizeF() <= 18.0, "a huge system font is clamped");
+    }
+
+    // 7. The backing plate: on a light image the corner block darkens its own text area, so light grey
+    // text does not sit on light grey anatomy — and it covers the text, not the corner.
+    {
+        CanvasWidget plate;
+        plate.resize(900, 600);
+        plate.setOverlay(description, viewing);
+        QImage image(900, 600, QImage::Format_ARGB32_Premultiplied);
+        image.fill(QColor(0x9a, 0xa3, 0xab));   // the same mid-grey the preview tool uses
+        QPainter painter(&image);
+        plate.paintOverlays(painter);
+        painter.end();
+
+        const QRect left = plate.overlayLeftArea();
+        const QRect right = plate.overlayRightArea();
+        const double bare = 0.299 * 0x9a + 0.587 * 0xa3 + 0.114 * 0xab;   // the fill, as luminance
+        // The plate sits behind the text: the region the text occupies is darker than the bare image.
+        // Measured over the text rect, not over the whole corner — the plate is sized to the text, which
+        // is the point (a plate over the whole corner would hide anatomy for nothing).
+        const QRect leftText = blockTextRect(plate, left, Qt::AlignLeft | Qt::AlignTop, description);
+        const QRect rightText = blockTextRect(plate, right, Qt::AlignRight | Qt::AlignTop, viewing);
+        expect(meanLuminance(image, leftText) < bare - 20, "the left block darkens its own text area");
+        expect(meanLuminance(image, rightText) < bare - 20, "the right block darkens its own text area");
+        // …the text is still the brightest thing in it…
+        expect(brightPixels(image, left) > 50, "the text still draws brighter than the plate");
+        // …and the middle of the canvas is untouched, so this is a plate and not a vignette.
+        const QRect middle(300, 250, 300, 100);
+        expect(std::abs(meanLuminance(image, middle) - bare) < 2.0,
+               "the backing plate does not tint the image away from the corners");
     }
 
     if (failures == 0) std::printf("overlay layout: all checks passed\n");

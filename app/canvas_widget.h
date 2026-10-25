@@ -73,6 +73,9 @@ public:
     // box, are testable rules rather than things to eyeball on a display.
     QRect overlayLeftArea() const;
     QRect overlayRightArea() const;
+    // The font the overlay and measurement text are drawn in, after the legibility clamp. Exposed so
+    // the floor/ceiling rules are testable rather than only visible on a good display.
+    QFont overlayTextFont() const;
     double windowCenter() const { return m_center; }
     double windowWidth() const { return m_width; }
     int frameWidthForCapture() const { return m_frame.width; }

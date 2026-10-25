@@ -137,6 +137,12 @@ target_link_libraries(clivus_test_overlay_layout PRIVATE clivus_core Qt6::Widget
 add_test(NAME overlay_layout COMMAND clivus_test_overlay_layout)
 set_tests_properties(overlay_layout PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Not a test: paints the same overlay into a PNG so the contrast/size rules can be looked at, and so
+# docs/images can be regenerated instead of hand-made. See docs/UNIT-6-EVIDENCE.md.
+qt_add_executable(clivus_overlay_preview overlay_preview.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_overlay_preview PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    OpenGL::GL)
+
 # v0.4.1 scroll scheduling: burst, prefetch overlap, direction change and a sequential walk, with the
 # request -> present numbers printed so the report can quote them instead of an impression.
 qt_add_executable(clivus_test_scroll test_scroll.cpp main_window.cpp browser_model.cpp

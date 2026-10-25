@@ -19,17 +19,24 @@ namespace {
 
 // Overlay and measurement text follow the widget's own font instead of a fixed 10 pt. On a machine
 // with larger UI text, the series description and slice position were then the smallest thing on
-// screen — the opposite of what they are for. Clamped so a very large system font cannot swamp the
-// image it is drawn over.
+// screen — the opposite of what they are for. The floor is 10 pt rather than 8: a radiology report
+// photographed two lines of 8 pt text over a dark image and they were unreadable, and the corner block
+// is read at a glance across a room, not studied. The ceiling (18 pt) keeps a very large system font
+// from swamping the image it is drawn over.
 QFont overlayFont(const QFont& base)
 {
     QFont font = base;
-    const double size = font.pointSizeF() > 0.0 ? font.pointSizeF() : 9.0;
-    font.setPointSizeF(std::clamp(size, 8.0, 16.0));
+    const double size = font.pointSizeF() > 0.0 ? font.pointSizeF() : 10.0;
+    font.setPointSizeF(std::clamp(size, 10.0, 18.0));
     return font;
 }
 
 }  // namespace
+
+QFont CanvasWidget::overlayTextFont() const
+{
+    return overlayFont(font());
+}
 
 CanvasWidget::CanvasWidget(QWidget* parent)
     : QOpenGLWidget(parent)
@@ -231,7 +238,7 @@ double CanvasWidget::angleDeg(QPointF p1, QPointF p2, QPointF p3) const
 // can be checked without a GL context.
 void CanvasWidget::paintOverlays(QPainter& painter) const
 {
-    painter.setFont(overlayFont(font()));
+    painter.setFont(overlayTextFont());
     drawMeasurements(painter);
     drawRois(painter);
     // The pen is set here, not inherited. The left block used to be drawn with whatever pen the
@@ -247,6 +254,13 @@ void CanvasWidget::paintOverlays(QPainter& painter) const
     const auto [leftArea, rightArea] = overlayCornerAreas();
     const auto drawCorner = [&](const QString& block, Qt::Alignment align, const QRect& area) {
         if (block.isEmpty() || area.isEmpty()) return;
+        // A backing plate behind the text, sized to the text and never to the whole corner: light grey
+        // over a dark image (or a bright one) is the other half of "the text is unreadable", and a photo
+        // of the running app is what showed it. The measurement labels have had one for the same reason.
+        const QRect textRect = painter.boundingRect(area, align | Qt::TextWordWrap, block);
+        if (!textRect.isEmpty()) {
+            painter.fillRect(textRect.adjusted(-6, -4, 6, 4), QColor(0, 0, 0, 140));
+        }
         painter.save();
         painter.setPen(shadow);
         painter.translate(1, 1);
@@ -288,7 +302,7 @@ QRect CanvasWidget::overlayRightArea() const
 
 void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& text) const
 {
-    p.setFont(overlayFont(font()));
+    p.setFont(overlayTextFont());
     const QRect r = measurementLabelRect(at, text);
     p.fillRect(r.adjusted(-3, -3, 3, 3), QColor(0, 0, 0, 160));   // backing: readable on any image
     p.setPen(QPen(clivus::style::accent().darker(115), 1.0));
@@ -300,7 +314,7 @@ void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& t
 // and the number disappears. Exposed so the rule can be tested without a GL context.
 QRect CanvasWidget::measurementLabelRect(QPointF at, const QString& text) const
 {
-    const QFont font = overlayFont(this->font());
+    const QFont font = overlayTextFont();
     const QRect bounds = QFontMetrics(font).boundingRect(QRect(0, 0, 1000, 1000), 0, text);
     QRect r = bounds.translated(int(at.x()) + 6, int(at.y()) - bounds.height() - 6);
     const QRect viewport = rect().adjusted(2, 2, -2, -2);
