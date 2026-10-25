@@ -75,14 +75,40 @@ int main(int argc, char** argv)
     CHECK(!window.cineRunningForTest());
 
     // (d) toggling twice leaves it stopped.
+    //
+    // What this checks is that playback stops advancing — not that no decode ever lands. A tick that
+    // was already requested when the user stopped still arrives (it is the slice it asked for; throwing
+    // it away would leave the viewer on a slice nobody chose), so the test first lets the pipeline go
+    // quiet, then requires the index to hold still for longer than several ticks would have moved it.
     window.toggleCine();
     CHECK(window.cineRunningForTest());
     window.toggleCine();
     CHECK(!window.cineRunningForTest());
-    const int settled = window.currentSliceForTest();
-    QThread::msleep(300);
-    QCoreApplication::processEvents();
+
+    int settled = window.currentSliceForTest();
+    {
+        QElapsedTimer quiet;
+        quiet.start();
+        int last = settled;
+        QElapsedTimer stable;
+        stable.start();
+        while (quiet.elapsed() < 5000 && stable.elapsed() < 400) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            QThread::msleep(20);
+            if (window.currentSliceForTest() != last) {
+                last = window.currentSliceForTest();
+                stable.restart();
+            }
+        }
+        settled = window.currentSliceForTest();
+    }
+    // 700 ms is more than eight ticks at the default 12 fps: a still-running cine cannot hide here.
+    for (int i = 0; i < 35; ++i) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(20);
+    }
     CHECK(window.currentSliceForTest() == settled);
+    CHECK(!window.cineRunningForTest());
 
     // (e) opening another folder stops cine.
     window.toggleCine();
