@@ -229,17 +229,50 @@ void CanvasWidget::paintOverlays(QPainter& painter) const
     // hold it off a bright image.
     const QColor text(0xe6, 0xe6, 0xe6, 230);
     const QColor shadow(0, 0, 0, 160);   // enough contrast on any image, still plain
-    const int pad = 8;
-    const auto drawCorner = [&](const QString& block, Qt::Alignment align) {
-        const QRect bounds = painter.boundingRect(
-            QRect(pad, pad, width() - 2 * pad, 200), align | Qt::TextWordWrap, block);
+    // Each block is laid out ONCE, in the rectangle it is drawn into, and the shadow is the same text
+    // translated by one pixel. The previous version measured the text with word wrap and then drew it
+    // into its own measured box: the second pass re-wrapped at a narrower width, so the lines on screen
+    // were not the lines that were measured and got clipped by the box they were re-wrapped into.
+    const auto [leftArea, rightArea] = overlayCornerAreas();
+    const auto drawCorner = [&](const QString& block, Qt::Alignment align, const QRect& area) {
+        if (block.isEmpty() || area.isEmpty()) return;
+        painter.save();
         painter.setPen(shadow);
-        painter.drawText(bounds.translated(1, 1), align, block);
+        painter.translate(1, 1);
+        painter.drawText(area, align | Qt::TextWordWrap, block);
+        painter.restore();
         painter.setPen(text);
-        painter.drawText(bounds, align, block);
+        painter.drawText(area, align | Qt::TextWordWrap, block);
     };
-    if (!m_overlayLeft.isEmpty()) drawCorner(m_overlayLeft, Qt::AlignLeft | Qt::AlignTop);
-    if (!m_overlayRight.isEmpty()) drawCorner(m_overlayRight, Qt::AlignRight | Qt::AlignTop);
+    drawCorner(m_overlayLeft, Qt::AlignLeft | Qt::AlignTop, leftArea);
+    drawCorner(m_overlayRight, Qt::AlignRight | Qt::AlignTop, rightArea);
+}
+
+// Where the two corner blocks live. They used to be handed the SAME rectangle — the full width of the
+// canvas — so a long series description drew straight underneath the window/level block and the two
+// read as one smear of overlapping glyphs. Half each keeps them apart at every width; the height is
+// bounded so a pathological description cannot cover the image, but never so tight that a wrapped one
+// is cut off.
+std::pair<QRect, QRect> CanvasWidget::overlayCornerAreas() const
+{
+    const int pad = 8;
+    const QRect viewport = rect().adjusted(pad, pad, -pad, -pad);
+    if (viewport.width() <= 0 || viewport.height() <= 0) return {QRect(), QRect()};
+    const int half = std::max(24, viewport.width() / 2);
+    const int height = std::max(24, std::min(viewport.height(), viewport.height() / 2));
+    const QRect left(viewport.left(), viewport.top(), half, height);
+    const QRect right(viewport.right() - half + 1, viewport.top(), half, height);
+    return {left, right};
+}
+
+QRect CanvasWidget::overlayLeftArea() const
+{
+    return overlayCornerAreas().first;
+}
+
+QRect CanvasWidget::overlayRightArea() const
+{
+    return overlayCornerAreas().second;
 }
 
 void CanvasWidget::drawMeasurementText(QPainter& p, QPointF at, const QString& text) const

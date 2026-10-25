@@ -6,6 +6,7 @@
 #include <QOpenGLWidget>
 #include <QPoint>
 #include <chrono>
+#include <utility>
 #include <vector>
 
 #include "clivus/image_frame.h"
@@ -67,6 +68,11 @@ public:
     // Where a measurement label lands for a given anchor (clamped into the canvas). Exposed so the
     // clamping rule is testable without a GL context.
     QRect measurementLabelRect(QPointF at, const QString& text) const;
+    // The two rectangles the corner overlay lays its text out in. Exposed for the same reason: that the
+    // blocks cannot overlap each other, and that a wrapped block is not clipped by its own measured
+    // box, are testable rules rather than things to eyeball on a display.
+    QRect overlayLeftArea() const;
+    QRect overlayRightArea() const;
     double windowCenter() const { return m_center; }
     double windowWidth() const { return m_width; }
     int frameWidthForCapture() const { return m_frame.width; }
@@ -154,6 +160,8 @@ private:
     void drawRois(QPainter& painter) const;
     RoiAnnotation buildRoi(bool ellipse, int row0, int col0, int row1, int col1) const;
     void drawMeasurementText(QPainter& p, QPointF at, const QString& text) const;
+    // The corner blocks' layout, in one place so paintOverlays() and the tests cannot disagree.
+    std::pair<QRect, QRect> overlayCornerAreas() const;
 
     clivus::ImageFrame m_frame;
     // Measurement state (roadmap: measurement tools) — this canvas is the single owner. Committed

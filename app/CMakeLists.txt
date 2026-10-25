@@ -129,6 +129,14 @@ target_link_libraries(clivus_test_browser_groups PRIVATE clivus_core Qt6::Widget
 add_test(NAME browser_groups COMMAND clivus_test_browser_groups "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 set_tests_properties(browser_groups PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# v0.4.1 overlay layout: the corner blocks get half the canvas each and are laid out once, in the
+# rectangle they are drawn into, so a long description cannot run under the window/level block.
+qt_add_executable(clivus_test_overlay_layout test_overlay_layout.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_test_overlay_layout PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    OpenGL::GL)
+add_test(NAME overlay_layout COMMAND clivus_test_overlay_layout)
+set_tests_properties(overlay_layout PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_test(NAME dicomweb COMMAND clivus_test_dicomweb "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 
 qt_add_executable(clivus_test_server_dialog test_server_dialog.cpp server_dialog.cpp dicomweb_client.cpp)
