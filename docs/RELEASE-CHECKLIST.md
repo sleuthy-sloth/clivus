@@ -1,7 +1,31 @@
 # Clivus Release Checklist
 
 A repeatable pre-release pass (roadmap §4). Tick through it for every tagged release.
-State below reflects preparation through **v0.4.0** — item-by-item, with how each was checked.
+State below reflects preparation through **v0.4.1** — item-by-item, with how each was checked.
+
+## 0a. v0.4.1 additions — the four issues from the 0.4.0 report
+
+Full evidence, including the verbatim "fails without the change" lines and the scroll numbers:
+[UNIT-6-EVIDENCE.md](UNIT-6-EVIDENCE.md).
+
+- [x] Browser groups fold and unfold (reported: a large folder could not be collapsed) — new `browser_groups`
+      target: click and keyboard folding at both levels, nested state kept per group, a query revealing
+      matches inside a folded group and restoring the folds on clear, a scan batch keeping both the fold
+      state and the selection, an empty folder. Fold keys are patient key + study UID, never row numbers.
+- [x] Overlay text legible (reported: "some on-screen text appears garbled") — `overlay_layout`: the two
+      corner blocks cannot overlap, a wrapped block is not clipped by its own measured box, the font floor
+      is 10 pt, and each block has a backing plate sized to its text. Contrast went 1.84:1 → 6.09:1 on a
+      mid-grey background (`docs/img/overlay-legibility-*.png`, painted by the real `paintOverlays()`).
+      **The reported symptom itself was not reproduced**; see the open question in UNIT-6-EVIDENCE.md.
+- [x] Stack scrolling (reported: jerky) — new `scroll` target: a 12-step burst presents only the target that
+      was real when it arrived plus the final one (before: it presented an abandoned slice and stayed on
+      it), a step into a slice the prefetch is decoding lands once, a direction change ends on the last
+      request. Request→present numbers are printed by the probe; they are Pi numbers, not a GPU claim.
+- [x] Window/level persists across slices (reported: reset on the next image) — new `window_level` target:
+      keep on step forward/back/out-of-order, reset only at a series boundary or a different matrix,
+      `resetView()` still restores the frame's default, colour frames unchanged, samples untouched.
+- [x] No regression in the existing 26 targets — `ctest` 30/30 on this host (baseline was 25/26: `cine`,
+      timing-sensitive on 4 cores, failed once before any change and passed afterwards).
 
 ## 0. v0.4.0 additions — checked, and how
 
