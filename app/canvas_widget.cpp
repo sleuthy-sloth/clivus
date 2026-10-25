@@ -9,7 +9,9 @@
 #include <QDebug>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPainter>
+#include <QResizeEvent>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -33,6 +35,28 @@ QFont overlayFont(const QFont& base)
 
 }  // namespace
 
+// The overlay child: same paintOverlays() code the canvas used to call from paintGL,
+// but painted by a plain widget, so the text goes through Qt's raster engine instead
+// of the GL glyph engine. Translucent (its backing plate is the only opaque part)
+// and transparent to the mouse, so it neither hides the image nor eats gestures.
+// It paints only when the canvas holds a frame, matching what paintGL used to do
+// when it returned early on an invalid frame.
+OverlayWidget::OverlayWidget(QWidget* parent, PaintFn paint, ValidFn valid)
+    : QWidget(parent), m_paint(std::move(paint)), m_valid(std::move(valid))
+{
+    setObjectName(QStringLiteral("canvasOverlay"));
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    setFocusPolicy(Qt::NoFocus);
+}
+
+void OverlayWidget::paintEvent(QPaintEvent*)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    if (m_valid && m_valid()) m_paint(painter);
+}
+
 QFont CanvasWidget::overlayTextFont() const
 {
     return overlayFont(font());
@@ -44,6 +68,9 @@ CanvasWidget::CanvasWidget(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(320, 240);
     setToolHint(ToolHint::WindowLevel);   // matches the default tool action the toolbar starts on
+    m_overlay = new OverlayWidget(this, [this](QPainter& p) { paintOverlays(p); },
+                                  [this] { return hasValidFrame(); });
+    m_overlay->setGeometry(rect());
 }
 
 // Roadmap 2.6: the cursor says which tool is active. Cross for window/level, open hand for pan (the
@@ -234,8 +261,8 @@ double CanvasWidget::angleDeg(QPointF p1, QPointF p2, QPointF p3) const
 }
 
 // Every overlay the canvas draws, in one place: corner blocks, measurements, ROIs. Called from
-// paintGL, and directly by the tests with a painter on a QImage, so the contrast and clamping rules
-// can be checked without a GL context.
+// OverlayWidget::paintEvent, and directly by the tests with a painter on a QImage, so the contrast
+// and clamping rules can be checked without a GL context.
 void CanvasWidget::paintOverlays(QPainter& painter) const
 {
     painter.setFont(overlayTextFont());
@@ -532,6 +559,14 @@ void CanvasWidget::uploadTexture()
     m_texChannels = m_frame.channels;
 }
 
+void CanvasWidget::resizeEvent(QResizeEvent* e)
+{
+    QOpenGLWidget::resizeEvent(e);
+    // The overlay covers the canvas exactly, so its coordinate system is the
+    // canvas's: paintOverlays() needs no translation to line up.
+    if (m_overlay) m_overlay->setGeometry(rect());
+}
+
 void CanvasWidget::paintGL()
 {
     QElapsedTimer timer;
@@ -549,7 +584,12 @@ void CanvasWidget::paintGL()
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    if (!m_frame.valid()) return;
+    if (!m_frame.valid()) {
+        // No frame, no overlay: the overlay widget repaints to transparent, which
+        // is what the old paintGL path produced by clearing the framebuffer.
+        if (m_overlay) m_overlay->update();
+        return;
+    }
 
     const double W = width();
     const double H = height();
@@ -579,17 +619,15 @@ void CanvasWidget::paintGL()
     glEnd();
     glDisable(GL_TEXTURE_2D);
 
-    // Overlays live inside paintGL so they cannot sit on top of the GL surface as child widgets and
-    // intercept mouse input (roadmap 2.6). The drawing itself lives in paintOverlays(), so the same
-    // code can be painted into an image on a machine with no GL context — which is how the contrast
-    // and clamping behaviour is tested.
-    if (measurementCount() > 0 || m_measureDragging || !m_anglePending.empty() || !m_rois.empty() ||
-        m_roiDragging || !m_overlayLeft.isEmpty() || !m_overlayRight.isEmpty()) {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        paintOverlays(painter);
-        painter.end();
-    }
+    // The overlay is NOT painted here anymore. QPainter text inside paintGL went
+    // through the GL glyph engine, and on at least one Windows backend (0.4.1
+    // report) individual glyphs came out sheared into diagonal hatching while
+    // every raster-painted widget stayed crisp. The overlay widget paints the
+    // same paintOverlays() code with the raster engine, composited over the GL
+    // surface by Qt; scheduling its repaint here keeps it tracking every GL
+    // frame, and a side effect worth having: grabFramebuffer() now really is
+    // overlay-free, as captureCanvasImageForExport() always claimed.
+    if (m_overlay) m_overlay->update();
 
     // fps from the wall-clock interval between paints, not from this paint's CPU time:
     // the number that matters is how fast the canvas can actually present.

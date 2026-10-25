@@ -175,6 +175,9 @@ private:
     void showAbout();
 private:   // one source of truth: toolbar, menu, cursor, hint
     void openMprView();
+#ifdef CLIVUS_HAVE_VTK
+    void openVtkView();
+#endif
     void saveLayout();     // roadmap 3.1: geometry/splitter/sidebar/diagnostics on close
     void restoreLayout();  // roadmap 3.1: guarded restore with built-in fallbacks
     void resetLayout();    // roadmap 3.1: View ▸ Reset Layout back to the built-in default
@@ -225,6 +228,9 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     bool m_cineAdvancing = false;   // true only while cine itself is stepping slices
     int m_cineFps = 12;
     QAction* m_mprAction = nullptr;
+#ifdef CLIVUS_HAVE_VTK
+    QAction* m_vtkAction = nullptr;   // VTK view entry; only exists in VTK builds
+#endif
     QAction* m_diagnosticsAction = nullptr;   // kept for layout save/restore (roadmap 3.1)
     bool m_showDiagnostics = false;   // persisted (roadmap 3.1): the toggle survives a restart
     std::vector<clivus::SeriesInfo> m_series;

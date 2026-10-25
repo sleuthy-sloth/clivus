@@ -81,6 +81,15 @@ target_link_libraries(clivus_test_overlay_render PRIVATE clivus_core Qt6::Widget
 add_test(NAME overlay_render COMMAND clivus_test_overlay_render)
 set_tests_properties(overlay_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Overlay widget: the corner text lives in a transparent raster child now, not in
+# paintGL, after the 0.4.1 report of sheared glyphs through the GL text engine.
+# Only the canvas and the palette are needed; no GL context is created.
+qt_add_executable(clivus_test_overlay_widget test_overlay_widget.cpp canvas_widget.cpp style.cpp)
+target_link_libraries(clivus_test_overlay_widget PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+                                                        OpenGL::GL)
+add_test(NAME overlay_widget COMMAND clivus_test_overlay_widget)
+set_tests_properties(overlay_widget PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # View state: what a slice step keeps and what a series switch resets.
 qt_add_executable(clivus_test_canvas_view test_canvas_view.cpp canvas_widget.cpp style.cpp)
 target_link_libraries(clivus_test_canvas_view PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
@@ -180,6 +189,67 @@ if(CLIVUS_BUILD_VTK_PROBE)
     add_executable(vtk_probe vtk_probe.cpp)
     target_link_libraries(vtk_probe PRIVATE clivus_core ${VTK_LIBRARIES})
     vtk_module_autoinit(TARGETS vtk_probe MODULES ${VTK_LIBRARIES})
+endif()
+
+# VTK canvas spike (Phase 1 of docs/VTK-MIGRATION.md): optional, off by default.
+# Builds the Volume -> vtkImageData bridge, the QVTK canvas widget, its demo,
+# and the handover test. The main app does NOT link VTK yet and the legacy
+# canvas stays the default until the VTK canvas proves pixel parity (Phase 2),
+# so a box without VTK builds exactly as before.
+option(CLIVUS_BUILD_VTK_CANVAS "Build the VTK canvas spike (needs VTK 9.1 with Qt support)" OFF)
+if(CLIVUS_BUILD_VTK_CANVAS)
+    # Debian's VTK links VTK::mpi, whose interface names MPI::MPI_C. Without a C
+    # compiler enabled, find_package(MPI) cannot provide that target and
+    # configure dies at generate time ("An ALIAS target is missing"). Enabling C
+    # here keeps every non-VTK build exactly as it was.
+    enable_language(C)
+    find_package(VTK 9.1 REQUIRED COMPONENTS
+        CommonCore CommonDataModel ImagingCore RenderingCore RenderingOpenGL2
+        RenderingVolumeOpenGL2 InteractionStyle GUISupportQt
+        # vtkImageSlice / vtkImageSliceMapper and vtkImageViewer2 (used by
+        # vtk_plane_widget and the MPR dialog) live in these two modules; without
+        # them the build compiles and then fails to link on vtkImageViewer2::New().
+        RenderingImage InteractionImage)
+    add_library(clivus_vtk_bridge STATIC vtk_volume_bridge.cpp)
+    target_include_directories(clivus_vtk_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(clivus_vtk_bridge PUBLIC clivus_core ${VTK_LIBRARIES})
+    vtk_module_autoinit(TARGETS clivus_vtk_bridge MODULES ${VTK_LIBRARIES})
+
+    # Phase 2-4 widgets, compiled into the main app behind CLIVUS_HAVE_VTK:
+    # the 2D canvas (frame-based), the MPR planes, the volume renderer and
+    # the dialog that hosts them. The main window only references the
+    # dialog behind the same guard, so a non-VTK build is untouched.
+    target_sources(clivus PRIVATE
+        vtk_canvas_widget.cpp vtk_canvas_widget_events.cpp
+        vtk_plane_widget.cpp vtk_volume_widget.cpp vtk_mpr_dialog.cpp)
+    target_link_libraries(clivus PRIVATE ${VTK_LIBRARIES})
+    target_compile_definitions(clivus PRIVATE CLIVUS_HAVE_VTK)
+    vtk_module_autoinit(TARGETS clivus MODULES ${VTK_LIBRARIES})
+
+    # The 2D canvas demo: the middle slice of a real volume on the VTK
+    # canvas, with wheel stepping. It needs the legacy canvas file only for
+    # the shared raster OverlayWidget, and style.cpp for its accent colour.
+    qt_add_executable(vtk_canvas_spike vtk_canvas_spike.cpp vtk_canvas_widget.cpp
+                      vtk_canvas_widget_events.cpp canvas_widget.cpp style.cpp)
+    target_link_libraries(vtk_canvas_spike PRIVATE clivus_vtk_bridge clivus_core
+                                                  Qt6::Widgets Qt6::OpenGLWidgets ${VTK_LIBRARIES})
+    vtk_module_autoinit(TARGETS vtk_canvas_spike MODULES ${VTK_LIBRARIES})
+
+    qt_add_executable(clivus_test_vtk_handover test_vtk_handover.cpp)
+    target_link_libraries(clivus_test_vtk_handover PRIVATE clivus_vtk_bridge clivus_core
+                                                          ${VTK_LIBRARIES})
+    vtk_module_autoinit(TARGETS clivus_test_vtk_handover MODULES ${VTK_LIBRARIES})
+    add_test(NAME vtk_handover COMMAND clivus_test_vtk_handover)
+    set_tests_properties(vtk_handover PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # Phase 2 cutover gate: legacy render() bytes vs the VTK window/level
+    # pipeline, offscreen (the mapping is a CPU imaging filter, no GL
+    # context needed, so this runs in CI).
+    add_executable(clivus_test_vtk_parity test_vtk_parity.cpp)
+    target_link_libraries(clivus_test_vtk_parity PRIVATE clivus_vtk_bridge clivus_core
+                                                       ${VTK_LIBRARIES})
+    vtk_module_autoinit(TARGETS clivus_test_vtk_parity MODULES ${VTK_LIBRARIES})
+    add_test(NAME vtk_parity COMMAND clivus_test_vtk_parity)
 endif()
 
 # The source carries non-ASCII literals (middle dots, dashes, degree signs) as UTF-8 bytes; without /utf-8 MSVC reads them as cp1252 and ships mojibake on Windows.

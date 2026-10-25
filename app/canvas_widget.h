@@ -6,6 +6,7 @@
 #include <QOpenGLWidget>
 #include <QPoint>
 #include <chrono>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -14,6 +15,35 @@
 // The 2D slice view: textured quad + its own window/level and pan/zoom.
 // Deliberately legacy GL 2.1 (compatibility profile) - enough to measure the real
 // per-frame cost now; replaced by a shader path when VTK 9 / MPR arrives.
+//
+// The corner overlay, measurements and ROIs are NOT painted by the canvas itself:
+// they live in OverlayWidget, a transparent child layered over the GL surface that
+// paints the same paintOverlays() code with the raster engine. Painting that text
+// with QPainter inside paintGL went through the GL glyph engine, and on at least
+// one Windows backend (0.4.1 report) individual glyphs came out sheared into
+// diagonal hatching while every raster-painted widget stayed crisp. Moving the
+// text off the GL surface removes that whole class of backend dependence; the
+// overlay takes no mouse input, so gestures still reach the canvas.
+class CanvasWidget;
+class OverlayWidget : public QWidget {
+    Q_OBJECT
+public:
+    // Paints through the callback whenever the validity callback says there
+    // is something to paint. The legacy canvas passes its own paintOverlays
+    // and hasValidFrame; the VTK canvas passes its equivalents. One widget
+    // class, because the raster-engine fix must not be re-solved per canvas.
+    using PaintFn = std::function<void(QPainter&)>;
+    using ValidFn = std::function<bool()>;
+    OverlayWidget(QWidget* parent, PaintFn paint, ValidFn valid);
+
+protected:
+    void paintEvent(QPaintEvent* e) override;
+
+private:
+    PaintFn m_paint;
+    ValidFn m_valid;
+};
+
 class CanvasWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
 public:
@@ -145,6 +175,7 @@ signals:
 protected:
     void initializeGL() override;
     void paintGL() override;
+    void resizeEvent(QResizeEvent* e) override;
     void mousePressEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
@@ -181,7 +212,7 @@ private:
     double m_spacingRow = 0.0, m_spacingCol = 0.0;
     int m_crosshairV = -1, m_crosshairH = -1;
     int m_lastFrameIndex = -1;   // measurements belong to one slice: cleared when the index changes
-    QString m_overlayLeft, m_overlayRight;   // drawn in paintGL; never intercepts the mouse
+    QString m_overlayLeft, m_overlayRight;   // drawn by OverlayWidget; never intercepts the mouse
     std::vector<uint8_t> m_bytes;
     unsigned int m_tex = 0;
     // Size the texture storage was last allocated at. A window/level change keeps it, so the update
@@ -201,4 +232,5 @@ private:
     ToolHint m_toolHint = ToolHint::WindowLevel;
     double m_windowMs = 0.0;
     std::chrono::steady_clock::time_point m_lastPaint{};
+    OverlayWidget* m_overlay = nullptr;   // raster overlay child; created in the constructor
 };

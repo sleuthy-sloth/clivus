@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "main_window.h"
+#ifdef CLIVUS_HAVE_VTK
+#include "vtk_mpr_dialog.h"
+#endif
 
 #include "about_dialog.h"
 #include "annotation_store.h"
@@ -509,6 +512,19 @@ MainWindow::MainWindow(QWidget* parent)
                             "no interpolation across slices. Needs per-slice geometry.");
     connect(m_mprAction, &QAction::triggered, this, &MainWindow::openMprView);
     view->addAction(m_mprAction);
+#ifdef CLIVUS_HAVE_VTK
+    // VTK view: the Phase 3/4 dialog (three VTK planes + volume rendering)
+    // for the same series. Same eligibility rule as MPR — no usable
+    // geometry, no window that would render positions it does not have.
+    m_vtkAction = new QAction("VTK view (&research/experimental)", this);
+    m_vtkAction->setEnabled(false);
+    m_vtkAction->setToolTip("Three VTK planes with a linked crosshair plus GPU volume rendering, "
+                            "for the current series. Experimental: the planes use VTK's window/level "
+                            "mapping, and the main canvas stays the legacy one until pixel parity "
+                            "is proven (see docs/VTK-MIGRATION.md).");
+    connect(m_vtkAction, &QAction::triggered, this, &MainWindow::openVtkView);
+    view->addAction(m_vtkAction);
+#endif
     view->addSeparator();
 
     // Cache is a convenience the user can drop at will (roadmap Phase 1): clearing it only costs a
@@ -905,6 +921,17 @@ void MainWindow::openMprView()
     view->raise();
     view->activateWindow();
 }
+
+#ifdef CLIVUS_HAVE_VTK
+void MainWindow::openVtkView()
+{
+    if (m_currentSeries < 0 || m_currentSeries >= int(m_series.size())) return;
+    auto* view = new VtkMprDialog(m_series[size_t(m_currentSeries)], this);
+    view->show();
+    view->raise();
+    view->activateWindow();
+}
+#endif
 
 QString MainWindow::currentSeriesUid() const
 {
@@ -1921,6 +1948,10 @@ void MainWindow::showSeries(int index)
     // IPP/IOP has no usable geometry, so the entry disables itself rather than opening a window
     // that would render positions it does not actually have.
     m_mprAction->setEnabled(clivus::hasUsableGeometry(m_series[size_t(index)]));
+#ifdef CLIVUS_HAVE_VTK
+    if (m_vtkAction != nullptr)
+        m_vtkAction->setEnabled(clivus::hasUsableGeometry(m_series[size_t(index)]));
+#endif
     m_sliceBar->setSliceCount(m_series[size_t(index)].totalFrames());
     m_sliceBar->setCurrentSlice(0);
     m_desiredSlice = 0;
