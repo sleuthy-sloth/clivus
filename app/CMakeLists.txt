@@ -137,6 +137,17 @@ target_link_libraries(clivus_test_overlay_layout PRIVATE clivus_core Qt6::Widget
 add_test(NAME overlay_layout COMMAND clivus_test_overlay_layout)
 set_tests_properties(overlay_layout PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# v0.4.1 scroll scheduling: burst, prefetch overlap, direction change and a sequential walk, with the
+# request -> present numbers printed so the report can quote them instead of an impression.
+qt_add_executable(clivus_test_scroll test_scroll.cpp main_window.cpp browser_model.cpp
+    series_summary.cpp deid_dialog.cpp export_images.cpp mpr_view.cpp annotation_store.cpp
+    server_dialog.cpp dicomweb_client.cpp branding.cpp about_dialog.cpp help_window.cpp
+    canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_scroll PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    Qt6::Concurrent Qt6::Network OpenGL::GL)
+add_test(NAME scroll COMMAND clivus_test_scroll "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(scroll PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 300)
+
 add_test(NAME dicomweb COMMAND clivus_test_dicomweb "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 
 qt_add_executable(clivus_test_server_dialog test_server_dialog.cpp server_dialog.cpp dicomweb_client.cpp)

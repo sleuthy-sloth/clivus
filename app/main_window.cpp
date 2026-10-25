@@ -29,6 +29,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QEvent>
+#include <QElapsedTimer>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QLineEdit>
@@ -1440,10 +1441,15 @@ void MainWindow::pumpSlice()
     if (!m_sliceInFlight && m_currentSeries >= 0 && m_prefetchFrame.valid() &&
         m_prefetchIndex == m_desiredSlice && m_failedSlice != m_desiredSlice) {
         m_prefetchIndex = -1;
+        ++m_scrollStats.prefetchServed;
         presentSlice(m_desiredSlice, std::move(m_prefetchFrame));
         return;
     }
     if (m_sliceInFlight || m_currentSeries < 0 || m_desiredSlice < 0) return;
+    // The speculative pool may already be fetching exactly this slice. Starting a second decode of it on
+    // the foreground pool was pure waste — two reads of the same file, and the second one lands after the
+    // first has already been presented — so wait for that one instead.
+    if (m_prefetchIndex == m_desiredSlice && m_prefetchWatcher->isRunning()) return;
     // Roadmap 3.5: a slice that already failed is not retried on its own — that would spin the
     // decode pool (pump → fail → pump) on a permanently broken file. The failure is cleared only
     // when the user picks a slice that previously succeeded, i.e. by moving away first.
@@ -1494,6 +1500,14 @@ void MainWindow::sliceFinished()
         if (m_desiredSlice != r.index) pumpSlice();
         return;
     }
+    // A decoded frame that is no longer what the wheel points at is NOT presented. Presenting it flashed
+    // a slice the user had already scrolled away from — one repaint of the wrong image, then another of
+    // the right one — which is the stutter the report describes. The pump is restarted for the slice that
+    // is current now; what is presented is always the frame it says it is, so nothing is mislabelled.
+    if (r.index != m_desiredSlice) {
+        pumpSlice();
+        return;
+    }
     presentSlice(r.index, std::move(r.frame));
 }
 
@@ -1504,6 +1518,14 @@ void MainWindow::sliceFinished()
 void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
 {
     if (m_currentSeries < 0) return;
+    ++m_scrollStats.presents;
+    m_presentedSlices.push_back(index);
+    if (index == m_desiredSlice) {
+        if (m_requestClock.isValid())
+            m_scrollStats.latencyMs.push_back(double(m_requestClock.nsecsElapsed()) / 1e6);
+    } else {
+        ++m_scrollStats.stalePresents;
+    }
     m_currentSlice = index;
     m_currentIsColour = frame.isColour();
     // Colour frames ignore the window (render() passes their samples through), so the fields stay
@@ -1535,6 +1557,7 @@ void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
         int fileIndex = 0, frameIndex = 0;
         if (series.locate(ahead, fileIndex, frameIndex)) {
             m_prefetchIndex = ahead;
+            ++m_scrollStats.prefetchStarts;
             const std::string path = series.files[size_t(fileIndex)];
             const quint64 epoch = m_epoch;
             m_prefetchWatcher->setFuture(QtConcurrent::run(&m_prefetch, [path, epoch, frameIndex] {
@@ -1562,9 +1585,13 @@ void MainWindow::onPrefetchLanded()
     }
     if (frame.valid()) {
         m_prefetchFrame = std::move(frame);   // parked: the pump serves it when the wheel arrives
+        // The wheel may have moved past this frame while it was decoding: the slice it points at now
+        // still needs its own decode, and nothing else would start it.
+        pumpSlice();
         return;
     }
     m_prefetchIndex = -1;   // a failed or stale prefetch: nothing parked
+    pumpSlice();            // and the target still needs its own decode
 }
 
 void MainWindow::cancelLoading()
@@ -1856,6 +1883,14 @@ QString MainWindow::groupKeyAtRowForTest(int row) const
     return item ? item->data(clivus::ui::kGroupKeyRole).toString() : QString();
 }
 
+// Test seam: the counters describe one scroll run, so a test clears them between runs.
+void MainWindow::resetScrollStatsForTest()
+{
+    m_scrollStats = ScrollStats{};
+    m_presentedSlices.clear();
+    m_requestClock.invalidate();
+}
+
 void MainWindow::showSeries(int index)
 {
     if (index < 0 || index >= int(m_series.size())) return;
@@ -1901,13 +1936,17 @@ void MainWindow::showSlice(int delta)
     const int total = series.totalFrames();
     if (total <= 0) return;   // clamp() would give an upper bound of -1 here
     // Step from where the wheel last pointed, not from what is on screen, so a fast spin does not
-    // keep restarting from the same slice.
-    const int from = std::max(m_sliceInFlight ? m_desiredSlice : m_currentSlice, 0);
+    // keep restarting from the same slice. The target is the right base even when nothing is in flight:
+    // a step can be waiting on the prefetch pool without a decode of its own, and measuring from the
+    // displayed slice would then drop every second notch of a fast spin.
+    const int from = std::max(m_desiredSlice >= 0 ? m_desiredSlice : m_currentSlice, 0);
     const int next = std::clamp(from + delta, 0, total - 1);
     if (next == m_desiredSlice && (m_sliceInFlight || next == m_currentSlice)) return;
-    m_lastStep = next > (m_sliceInFlight ? m_desiredSlice : m_currentSlice);
+    m_lastStep = next > from;
     m_hasStep = true;
     m_desiredSlice = next;
+    ++m_scrollStats.requests;
+    m_requestClock.start();   // latency is measured from the last slice the user asked for
     // The slider follows the slice the wheel is aiming at, not the one still decoding: during a fast
     // spin the strip and the decode pump both chase the same target, and the pump decides when the
     // decode happens, so this cannot outrun the coalescing in pumpSlice().
@@ -1927,6 +1966,8 @@ void MainWindow::goToSlice(int index)
     const int target = std::clamp(index, 0, total - 1);
     if (target == m_desiredSlice && (m_sliceInFlight || target == m_currentSlice)) return;
     m_desiredSlice = target;
+    ++m_scrollStats.requests;
+    m_requestClock.start();
     pumpSlice();
     if (!m_sliceInFlight) updateInfo();
 }

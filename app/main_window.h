@@ -110,6 +110,22 @@ public:
     bool rowIsGroupHeaderForTest(int row) const;
     QString groupKeyAtRowForTest(int row) const;
 
+    // Scroll scheduling, made observable (v0.4.1, radiology report: "scrolling through the stack feels
+    // jerky"). A jerk is not a number, so these are: how many targets were asked for, how many frames
+    // reached the canvas, how many of those were not the slice the wheel was pointing at any more, and
+    // how often a slice was decoded twice because the prefetch and the request path both asked for it.
+    struct ScrollStats {
+        int requests = 0;
+        int presents = 0;
+        int stalePresents = 0;      // decoded a slice the wheel had already moved past
+        int prefetchStarts = 0;
+        int prefetchServed = 0;     // presented straight from the speculative slot
+        std::vector<double> latencyMs;   // request -> present, for the targets that were shown
+    };
+    const ScrollStats& scrollStatsForTest() const { return m_scrollStats; }
+    const std::vector<int>& presentedSlicesForTest() const { return m_presentedSlices; }
+    void resetScrollStatsForTest();
+
 protected:
     void closeEvent(QCloseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;   // drop a folder or DICOM file anywhere
@@ -245,6 +261,11 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     clivus::ImageFrame m_prefetchFrame;   // the parked, still-unpresented neighbour frame
     int m_prefetchIndex = -1;             // which slice the parked frame (or the in-flight one) is
     bool m_sliceInFlight = false;
+    // Scroll scheduling measurement, and the monotonic clock the latency is measured against. Both are
+    // read by the scroll test; nothing in the product depends on them.
+    ScrollStats m_scrollStats;
+    std::vector<int> m_presentedSlices;
+    QElapsedTimer m_requestClock;
     int m_benchFrames = 0;     // pending --bench request, honoured once the first slice is on screen
     int m_benchRow = 0;
 };
