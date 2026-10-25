@@ -118,6 +118,17 @@ target_link_libraries(clivus_test_export PRIVATE clivus_core Qt6::Widgets Qt6::C
 add_test(NAME export COMMAND clivus_test_export "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 set_tests_properties(export PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# v0.4.1 browser groups: folding and unfolding a patient or study, and everything that has to keep
+# working around it (selection, scan batches, the query, the empty folder).
+qt_add_executable(clivus_test_browser_groups test_browser_groups.cpp main_window.cpp browser_model.cpp
+    series_summary.cpp deid_dialog.cpp export_images.cpp mpr_view.cpp annotation_store.cpp
+    server_dialog.cpp dicomweb_client.cpp branding.cpp about_dialog.cpp help_window.cpp
+    canvas_widget.cpp view_controls.cpp)
+target_link_libraries(clivus_test_browser_groups PRIVATE clivus_core Qt6::Widgets Qt6::OpenGLWidgets
+    Qt6::Concurrent Qt6::Network OpenGL::GL)
+add_test(NAME browser_groups COMMAND clivus_test_browser_groups "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
+set_tests_properties(browser_groups PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_test(NAME dicomweb COMMAND clivus_test_dicomweb "${CMAKE_CURRENT_SOURCE_DIR}/../testdata/corpus")
 
 qt_add_executable(clivus_test_server_dialog test_server_dialog.cpp server_dialog.cpp dicomweb_client.cpp)
