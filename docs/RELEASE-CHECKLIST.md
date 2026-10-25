@@ -1,7 +1,31 @@
 # Clivus Release Checklist
 
 A repeatable pre-release pass (roadmap §4). Tick through it for every tagged release.
-State below reflects preparation through **v0.4.1** — item-by-item, with how each was checked.
+State below reflects preparation through **v0.4.2** — item-by-item, with how each was checked.
+
+## 0b. v0.4.2 additions
+
+Full evidence: [VTK-INTEGRATION-EVIDENCE.md](VTK-INTEGRATION-EVIDENCE.md).
+
+- [x] Overlay text is painted by the raster engine — the corner blocks, measurements and ROIs moved out
+      of `paintGL` into a transparent `OverlayWidget` child, so the glyphs no longer go through the GL
+      text engine that produced the 0.4.1 sheared-glyph report. New `overlay_widget` target: the child
+      exists, covers the canvas, takes no mouse input, and its own `grab()` renders the corner text.
+      Proved it fails without the change — removing the child makes the test crash (exit 139) rather
+      than pass. **The reported symptom itself is still unreproduced**; this removes the code path, it
+      does not confirm the reporter's backend.
+- [x] VTK migration phases 1-4 land behind `CLIVUS_BUILD_VTK_CANVAS` (default OFF). **The packaged
+      Windows exe does not contain VTK** and the legacy canvas is still what it draws with. Phase 1 and
+      the Phase 2 parity gate were run for the first time against real VTK 9.3: `vtk_handover` passes,
+      `vtk_parity` passes with max diff 1 grey level and exact colour bytes. Everything touching
+      `QVTKOpenGLNativeWidget` is uncompiled anywhere yet — Debian's VTK is built against Qt 5 and this
+      app is Qt 6, so it needs a VTK built with Qt 6 on the Windows/macOS builder.
+- [x] The parity gate's own limit is recorded, not glossed: it is blind to the `width` vs `width - 1`
+      range error it was written to defend (mutation passes with max diff 1; an ignored inversion fails
+      at 255). Testing the lookup table's bounds directly is the fix, and is follow-up work.
+- [x] No regression in the existing targets — `ctest` 31/31 on this host (30 before, plus
+      `overlay_widget`), full build 285/285 clean.
+
 
 ## 0a. v0.4.1 additions — the four issues from the 0.4.0 report
 
