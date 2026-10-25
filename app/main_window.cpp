@@ -1768,7 +1768,7 @@ void MainWindow::applySeriesFilter()
     }
 
     // Fold state on top of the query result: same writer, so the two can never disagree.
-    applyCollapseState(filtering, query);
+    applyCollapseState(filtering);
 
     if (filtering && matchesFound == 0) {
         auto* placeholder = new QListWidgetItem("(no matching series)");
@@ -1834,9 +1834,8 @@ bool MainWindow::toggleGroupCollapse(int row)
 // While a query is active the groups are shown open. A search that finds a series inside a folded
 // study and then hides it would be a worse bug than the one this fixes; the fold state is kept, so
 // clearing the query puts the folded groups back exactly as they were.
-void MainWindow::applyCollapseState(bool filtering, const QString& query)
+void MainWindow::applyCollapseState(bool filtering)
 {
-    Q_UNUSED(query);
     const bool folding = !filtering;
     bool patientCollapsed = false;
     bool studyCollapsed = false;

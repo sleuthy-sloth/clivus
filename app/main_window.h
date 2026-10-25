@@ -183,7 +183,7 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     // (clivus::ui::kGroupKeyRole), never by row number or label: every scan batch rebuilds the rows,
     // and two patients can share a name.
     bool toggleGroupCollapse(int row);
-    void applyCollapseState(bool filtering, const QString& query);
+    void applyCollapseState(bool filtering);
 
     QLineEdit* m_seriesSearch = nullptr;   // roadmap 3.2: filters the list by description/modality
     QListWidget* m_seriesList = nullptr;
