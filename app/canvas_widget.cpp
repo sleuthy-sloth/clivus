@@ -840,5 +840,21 @@ void CanvasWidget::wheelEvent(QWheelEvent* e)
         update();
         return;
     }
-    emit scrollRequested(e->angleDelta().y() > 0 ? -1 : 1);
+    // One wheel event is not one notch on every device. Notched wheels send 120 units per event,
+    // but high-resolution wheels and trackpads send many small deltas per flick — and the old code
+    // stepped one slice per event whatever the magnitude, so a single flick could teleport dozens
+    // of slices while the decode pump chased the target and dropped everything between. Accumulate
+    // to whole notches (120 units) instead: a notched wheel behaves exactly as before, one step per
+    // event, while a smooth device steps in proportion to how far it actually scrolled.
+    // Trackpads often report only pixel deltas (angleDelta 0), which the old code read as a downward
+    // step whatever the direction; fall back to them when there is no angle delta, and ignore an
+    // event with neither (a purely horizontal scroll must not change slices).
+    int delta = e->angleDelta().y();
+    if (delta == 0) delta = e->pixelDelta().y();
+    m_wheelRemainder += delta;
+    const int steps = m_wheelRemainder / 120;   // truncation toward zero keeps the sign
+    if (steps == 0) return;
+    m_wheelRemainder -= steps * 120;
+    const int direction = steps > 0 ? -1 : 1;   // wheel up steps back, as before
+    for (int i = 0; i < std::abs(steps); ++i) emit scrollRequested(direction);
 }

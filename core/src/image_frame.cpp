@@ -60,19 +60,31 @@ void ImageFrame::render(uint8_t* out, double center, double width) const
     if (width < 1.0) width = 1.0;           // guard: a zero window would divide by zero
 
     const double first = center - 0.5 - (width - 1.0) / 2.0;
-    const double last  = center - 0.5 + (width - 1.0) / 2.0;
+
+    if (width <= 1.0) {
+        // Degenerate window: zero width, so the old three-way clamp is a step at first
+        // (x <= first maps to 0, anything above to 255). Kept separate because the general
+        // form would divide by (width - 1) == 0.
+        for (size_t i = 0; i < pixels.size(); ++i) {
+            double y = pixels[i] > first ? 255.0 : 0.0;
+            if (invert) y = 255.0 - y;   // MONOCHROME1 after clamping
+            out[i] = uint8_t(y + 0.5);
+        }
+        return;
+    }
     const double scale = 255.0 / (width - 1.0);
 
-    // shortcut: per-pixel float math instead of a 4096-entry LUT; fine at 1k^2 on
-    // drag, switch to a LUT if window/level dragging ever shows up in the frame budget.
+    // Branchless form of the three-way clamp, and output-identical to it: (x - first) * scale is
+    // <= 0 exactly when x <= first and >= 255 exactly when x >= last (scale > 0 here), so clamping
+    // it reproduces both branches, and the middle expression is literally the same computation.
+    // The old branched loop defeated vectorization; this one is what the scroll path runs once per
+    // presented frame, so it is worth the shape. A LUT was considered and rejected: pixels are
+    // floats (slope/intercept can leave fractional values), so an integer-indexed table would
+    // quantize them and change output bytes the core tests pin.
     for (size_t i = 0; i < pixels.size(); ++i) {
-        const double x = pixels[i];
-        double y;
-        if (x <= first)      y = 0.0;
-        else if (x > last)   y = 255.0;
-        else                 y = (x - first) * scale;
-        const double shown = invert ? 255.0 - y : y;   // MONOCHROME1 after clamping
-        out[i] = uint8_t(std::clamp(shown, 0.0, 255.0) + 0.5);
+        double y = std::clamp((double(pixels[i]) - first) * scale, 0.0, 255.0);
+        if (invert) y = 255.0 - y;   // MONOCHROME1 after clamping
+        out[i] = uint8_t(y + 0.5);
     }
 }
 

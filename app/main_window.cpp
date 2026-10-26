@@ -26,6 +26,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <atomic>
+#include <cstdlib>
 #include <memory>
 #include <QIcon>
 #include <QImage>
@@ -273,10 +274,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_sliceWatcher = new QFutureWatcher<SliceResult>(this);
     connect(m_sliceWatcher, &QFutureWatcherBase::finished, this, &MainWindow::sliceFinished);
 
-    // The prefetch slot's own watcher: smooth scroll (see presentSlice). Never presents anything
-    // itself without the user's target agreeing (onPrefetchLanded checks); shares the foreground
-    // pool, so the app stays one decode at a time.
-    m_prefetchWatcher = new QFutureWatcher<clivus::ImageFrame>(this);
+    // The lookahead's own watcher: smooth scroll (see presentSlice/refreshPrefetch). A landing
+    // only ever enters the frame cache (onPrefetchLanded checks the epoch); the pump presents it
+    // if the wheel is pointing at it. The lookahead runs on its own single-thread pool, so a
+    // requested frame never queues behind speculative work.
+    m_prefetchWatcher = new QFutureWatcher<PrefetchResult>(this);
     connect(m_prefetchWatcher, &QFutureWatcherBase::finished, this,
             &MainWindow::onPrefetchLanded);
 
@@ -945,10 +947,16 @@ void MainWindow::loadAnnotationsForSlice(const int slice)
     if (slice < 0) return;
     const QString uid = currentSeriesUid();
     if (uid.isEmpty()) return;   // no Series Instance UID: nothing can be keyed, so nothing loads
-    QString warning;
-    const auto stored = AnnotationStore::load(uid, &warning);
-    if (!warning.isEmpty()) statusBar()->showMessage(warning, 8000);
-    for (const auto& entry : stored) {
+    // The sidecar used to be re-read and re-parsed on EVERY presented slice — file I/O on the UI
+    // thread inside the scroll path, for data that only changes when the user saves a measurement.
+    // Load once per series; a save invalidates it (see saveAnnotationsForSlice).
+    if (uid != m_annoUid) {
+        QString warning;
+        m_annoEntries = AnnotationStore::load(uid, &warning);
+        m_annoUid = uid;
+        if (!warning.isEmpty()) statusBar()->showMessage(warning, 8000);
+    }
+    for (const auto& entry : m_annoEntries) {
         if (entry.slice != slice) continue;
         std::vector<CanvasWidget::RoiAnnotation> rois;
         rois.reserve(size_t(entry.rois.size()));
@@ -969,8 +977,14 @@ void MainWindow::saveAnnotationsForSlice(const int slice)
     copy.reserve(int(rois.size()));
     for (const auto& roi : rois) copy.append(roi);
     QString error;
-    if (!AnnotationStore::setSliceRois(uid, slice, copy, &error))
+    if (!AnnotationStore::setSliceRois(uid, slice, copy, &error)) {
         statusBar()->showMessage(error, 8000);
+    } else {
+        // The disk copy changed, so the per-series cache in loadAnnotationsForSlice() is stale:
+        // drop it and let the next present reload once, rather than showing last save's ROIs.
+        m_annoUid.clear();
+        m_annoEntries.clear();
+    }
 }
 
 // One CSV for the open series: every ROI the sidecar holds, with its statistics recomputed against
@@ -1180,6 +1194,7 @@ void MainWindow::openFolder(const QString& dir)
     // Everything already in flight belongs to the folder we are leaving: the scan is told to stop,
     // the thumbnails are cancelled before they start, and m_epoch retires any slice decode.
     ++m_epoch;
+    clearFrameCache();   // the old folder's decoded frames must never serve the new one
     if (m_scanControl) m_scanControl->cancel = true;
     if (m_thumbWatcher->isRunning()) m_thumbWatcher->cancel();
 
@@ -1461,22 +1476,35 @@ void MainWindow::fillReadyThumbnails()
 // Decodes are strictly one at a time and always chase m_desiredSlice, so spinning the wheel while a
 // decode runs costs one more decode after it, not a queue of them. A slice index is a frame index
 // across the whole series, so one 15-frame object is 15 steps rather than one.
+//
+// Scroll smoothness (radiology report: scrolling jerks and skips frames): the first thing the pump
+// checks is the decoded-frame cache. Before this, every step that was not the single prefetched
+// neighbour paid a full decode — file re-open, DCMTK parse, decompress — and while that decode ran,
+// further wheel steps only moved the target, so the display jumped from one landed slice to the next
+// instead of sweeping through the stack. A cached step presents instantly, and the lookahead keeps
+// the next few slices decoded ahead of the wheel, so sequential scrolling no longer waits on the
+// decoder at all.
 void MainWindow::pumpSlice()
 {
-    // A transient fresh decode of the same slice skips straight to the decode; but a parked
-    // prefetch for exactly this index presents instantly (that is the smooth-scroll payoff).
-    if (!m_sliceInFlight && m_currentSeries >= 0 && m_prefetchFrame.valid() &&
-        m_prefetchIndex == m_desiredSlice && m_failedSlice != m_desiredSlice) {
-        m_prefetchIndex = -1;
-        ++m_scrollStats.prefetchServed;
-        presentSlice(m_desiredSlice, std::move(m_prefetchFrame));
-        return;
+    // A cached slice presents instantly (that is the smooth-scroll payoff). The copy keeps the
+    // cache's frame for the scroll back, which costs a memcpy against a decode that costs a file
+    // read and a decompress. The != current guard matters now that presented frames stay cached:
+    // without it, every prefetch landing would re-present the slice already on screen through this
+    // branch, since the desired slice is cached by definition once it has been shown.
+    if (!m_sliceInFlight && m_currentSeries >= 0 && m_desiredSlice >= 0 &&
+        m_desiredSlice != m_currentSlice && m_failedSlice != m_desiredSlice) {
+        const auto it = m_frameCache.find(m_desiredSlice);
+        if (it != m_frameCache.end()) {
+            ++m_scrollStats.prefetchServed;
+            presentSlice(m_desiredSlice, it->second);
+            return;
+        }
     }
     if (m_sliceInFlight || m_currentSeries < 0 || m_desiredSlice < 0) return;
-    // The speculative pool may already be fetching exactly this slice. Starting a second decode of it on
+    // The prefetch pool may already be fetching exactly this slice. Starting a second decode of it on
     // the foreground pool was pure waste — two reads of the same file, and the second one lands after the
     // first has already been presented — so wait for that one instead.
-    if (m_prefetchIndex == m_desiredSlice && m_prefetchWatcher->isRunning()) return;
+    if (m_prefetchInFlight == m_desiredSlice && m_prefetchWatcher->isRunning()) return;
     // Roadmap 3.5: a slice that already failed is not retried on its own — that would spin the
     // decode pool (pump → fail → pump) on a permanently broken file. The failure is cleared only
     // when the user picks a slice that previously succeeded, i.e. by moving away first.
@@ -1529,12 +1557,19 @@ void MainWindow::sliceFinished()
     }
     // A decoded frame that is no longer what the wheel points at is NOT presented. Presenting it flashed
     // a slice the user had already scrolled away from — one repaint of the wrong image, then another of
-    // the right one — which is the stutter the report describes. The pump is restarted for the slice that
-    // is current now; what is presented is always the frame it says it is, so nothing is mislabelled.
+    // the right one — which is the stutter the report describes. But it is NOT thrown away either:
+    // it goes into the cache, so scrolling back onto it — the direction reversal that used to pay a
+    // second decode — is instant. The pump is restarted for the slice that is current now; what is
+    // presented is always the frame it says it is, so nothing is mislabelled.
     if (r.index != m_desiredSlice) {
+        cacheInsert(r.index, std::move(r.frame));
         pumpSlice();
         return;
     }
+    // The presented frame stays cached as well: the copy costs a memcpy, the scroll back would cost
+    // a decode, and the cache is bounded by cacheTrim().
+    m_frameCache[r.index] = r.frame;
+    cacheTrim();
     presentSlice(r.index, std::move(r.frame));
 }
 
@@ -1570,55 +1605,140 @@ void MainWindow::presentSlice(int index, clivus::ImageFrame frame)
     updateInfo();
 
     // Smooth scroll (radiology report: the wheel stutters and skips): with the display settled,
-    // quietly decode the neighbour in the wheel's travel direction into a separate prefetch slot.
-    // The next step presents it instantly (pumpSlice consumes the slot) instead of sitting through
-    // a decode. The speculative decode runs on its OWN single-thread pool: a requested frame must
-    // never queue behind work the user did not ask for, and QtConcurrent gives no way to cancel a
-    // task already handed to a pool — so on a direction reversal the old shared pool made the frame
-    // the user wanted wait for the frame they had just scrolled past. One decode at a time still
-    // holds within each pool, and a landing behind a series change is dropped by the epoch check.
-    const int total = m_series[size_t(m_currentSeries)].totalFrames();
-    const int ahead = m_currentSlice + (m_lastStep ? 1 : -1);
-    if (ahead >= 0 && ahead < total && m_prefetchIndex != ahead) {
-        const auto& series = m_series[size_t(m_currentSeries)];
-        int fileIndex = 0, frameIndex = 0;
-        if (series.locate(ahead, fileIndex, frameIndex)) {
-            m_prefetchIndex = ahead;
-            ++m_scrollStats.prefetchStarts;
-            const std::string path = series.files[size_t(fileIndex)];
-            const quint64 epoch = m_epoch;
-            m_prefetchWatcher->setFuture(QtConcurrent::run(&m_prefetch, [path, epoch, frameIndex] {
-                clivus::ImageFrame frame;
-                frame.frameIndex = 0;
-                const bool ok = clivus::loadFrame(path, frame, frameIndex);
-                return ok ? frame : clivus::ImageFrame{};
-            }));
-        }
-    }
+    // refill the lookahead queue in the wheel's travel direction. The old single-neighbour slot
+    // only ever helped a scroll slower than one decode; a queue several deep is what keeps a
+    // natural scroll ahead of the decoder. The speculative decode still runs on its OWN
+    // single-thread pool: a requested frame must never queue behind work the user did not ask for,
+    // and QtConcurrent gives no way to cancel a task already handed to a pool — so on a direction
+    // reversal the old shared pool made the frame the user wanted wait for the frame they had just
+    // scrolled past. One decode at a time still holds within each pool, and a landing behind a
+    // series change is dropped by the epoch check in onPrefetchLanded().
+    refreshPrefetch();
     startBenchmark();
 }
 
-// The prefetch landing: cache only what still belongs to the open series (epoch), and present it
-// straight away if the wheel is already pointing at it — that is the case where the user scrolled
-// while the prefetch was in flight and the slot's frame is exactly what they asked for.
+// The prefetch landing: the frame goes into the cache if it still belongs to the open series
+// (epoch), and the pump then serves it straight away if the wheel is already pointing at it — that
+// is the case where the user scrolled while the prefetch was in flight. A landing for any other
+// slice is not waste either: it is the lookahead doing its job, and the scroll back onto it is
+// already paid for.
 void MainWindow::onPrefetchLanded()
 {
-    const clivus::ImageFrame frame = m_prefetchWatcher->result();
-    if (frame.valid() && m_currentSeries >= 0 && m_prefetchIndex >= 0 &&
-        m_prefetchIndex == m_desiredSlice && !m_sliceInFlight) {
-        m_prefetchIndex = -1;
-        presentSlice(m_desiredSlice, std::move(frame));
+    PrefetchResult r = m_prefetchWatcher->result();
+    m_prefetchInFlight = -1;
+    if (r.frame.valid() && r.epoch == m_epoch && m_currentSeries >= 0 && r.index >= 0)
+        cacheInsert(r.index, std::move(r.frame));
+    // A failed or stale prefetch leaves nothing cached, and the target still needs its own decode;
+    // pumpSlice() is idempotent, so calling it unconditionally is the safe shape for both cases.
+    pumpSlice();
+    startNextPrefetch();
+}
+
+// Rebuilds the lookahead queue from the slice on screen: the next few slices in the wheel's travel
+// direction, nearest first, skipping anything already cached, anything the foreground pump owns
+// (the desired slice), and the slice the prefetch pool is decoding now. Rebuilding from scratch on
+// every present is what makes a direction reversal cheap: indices that are no longer wanted simply
+// stop being queued, and only the one already on the pool runs to completion and lands in the cache.
+void MainWindow::refreshPrefetch()
+{
+    if (m_currentSeries < 0 || m_currentSlice < 0) return;
+    constexpr int kPrefetchDepth = 4;   // slices of lookahead: enough for a natural scroll burst,
+                                        // small enough that a reversal wastes at most one decode
+    m_prefetchQueue.clear();
+    const int total = m_series[size_t(m_currentSeries)].totalFrames();
+    const int step = m_lastStep ? 1 : -1;
+    for (int k = 1; k <= kPrefetchDepth; ++k) {
+        const int ahead = m_currentSlice + step * k;
+        if (ahead < 0 || ahead >= total) break;
+        if (ahead == m_desiredSlice || ahead == m_prefetchInFlight) continue;
+        if (m_frameCache.find(ahead) != m_frameCache.end()) continue;
+        if (m_failedSlice == ahead) continue;
+        m_prefetchQueue.push_back(ahead);
+    }
+    startNextPrefetch();
+}
+
+void MainWindow::startNextPrefetch()
+{
+    if (m_prefetchWatcher->isRunning()) return;
+    if (m_currentSeries < 0) {
+        m_prefetchQueue.clear();
+        m_prefetchInFlight = -1;
         return;
     }
-    if (frame.valid()) {
-        m_prefetchFrame = std::move(frame);   // parked: the pump serves it when the wheel arrives
-        // The wheel may have moved past this frame while it was decoding: the slice it points at now
-        // still needs its own decode, and nothing else would start it.
-        pumpSlice();
+    // The queue is rebuilt on every present, so a stale head (cached or failed since it was queued,
+    // or now the desired slice) is dropped here rather than decoded.
+    while (!m_prefetchQueue.empty()) {
+        const int ahead = m_prefetchQueue.front();
+        m_prefetchQueue.pop_front();
+        if (ahead == m_desiredSlice || ahead == m_prefetchInFlight) continue;
+        if (m_frameCache.find(ahead) != m_frameCache.end()) continue;
+        if (m_failedSlice == ahead) continue;
+        const auto& series = m_series[size_t(m_currentSeries)];
+        int fileIndex = 0, frameIndex = 0;
+        if (!series.locate(ahead, fileIndex, frameIndex)) continue;
+        const std::string path = series.files[size_t(fileIndex)];
+        const quint64 epoch = m_epoch;
+        m_prefetchInFlight = ahead;
+        m_prefetchIndex = ahead;   // the probe: the pool has targeted a slice for this series
+        ++m_scrollStats.prefetchStarts;
+        m_prefetchWatcher->setFuture(QtConcurrent::run(&m_prefetch, [path, epoch, frameIndex, ahead] {
+            PrefetchResult r;
+            r.index = ahead;
+            r.epoch = epoch;
+            const bool ok = clivus::loadFrame(path, r.frame, frameIndex);
+            if (!ok) r.frame = clivus::ImageFrame{};
+            return r;
+        }));
         return;
     }
-    m_prefetchIndex = -1;   // a failed or stale prefetch: nothing parked
-    pumpSlice();            // and the target still needs its own decode
+    m_prefetchInFlight = -1;
+}
+
+void MainWindow::cacheInsert(int index, clivus::ImageFrame frame)
+{
+    if (!frame.valid() || index < 0) return;
+    m_frameCache[index] = std::move(frame);
+    cacheTrim();
+}
+
+void MainWindow::cacheTrim()
+{
+    // 48 frames or 256 MB of float pixels, whichever binds first: a 512^2 frame is 1 MB, a 1024^2
+    // frame 4 MB, so ordinary stacks keep a generous window and huge matrices still keep several
+    // slices. Eviction is farthest-from-the-displayed-slice first, so the slices around the wheel
+    // are always the last to go.
+    constexpr size_t kMaxEntries = 48;
+    constexpr size_t kMaxBytes = 256u * 1024u * 1024u;
+    auto bytes = [&] {
+        size_t total = 0;
+        for (const auto& entry : m_frameCache)
+            total += entry.second.pixels.size() * sizeof(float);
+        return total;
+    };
+    while ((!m_frameCache.empty() && m_frameCache.size() > kMaxEntries) || bytes() > kMaxBytes) {
+        int farthest = -1;
+        int farthestDist = -1;
+        for (const auto& entry : m_frameCache) {
+            const int dist = std::abs(entry.first - m_currentSlice);
+            if (dist > farthestDist) {
+                farthestDist = dist;
+                farthest = entry.first;
+            }
+        }
+        if (farthest < 0) break;
+        m_frameCache.erase(farthest);
+    }
+}
+
+void MainWindow::clearFrameCache()
+{
+    m_frameCache.clear();
+    m_prefetchQueue.clear();
+    m_prefetchInFlight = -1;
+    m_prefetchIndex = -1;
+    m_annoUid.clear();
+    m_annoEntries.clear();
 }
 
 void MainWindow::cancelLoading()
@@ -1934,8 +2054,7 @@ void MainWindow::showSeries(int index)
 
     ++m_epoch;              // a decode still running belongs to the series we are leaving
     m_failedSlice = -1;     // new series, fresh failure tracking (roadmap 3.5)
-    m_prefetchFrame = clivus::ImageFrame{};   // the parked prefetch belongs to the previous series
-    m_prefetchIndex = -1;
+    clearFrameCache();      // cached frames and the lookahead belong to the previous series
     m_hasStep = false;      // nothing about the wheel is remembered across a series switch
     m_currentSeries = index;
     m_currentSlice = -1;    // nothing decoded for this series yet

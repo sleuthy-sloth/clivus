@@ -7,9 +7,12 @@
 class QTimer;
 #include <QTimer>
 #include <QThreadPool>
+#include <deque>
+#include <map>
 #include <memory>
 #include <vector>
 
+#include "annotation_store.h"
 #include "clivus/image_frame.h"
 #include "clivus/index_store.h"
 #include "mpr_view.h"
@@ -89,7 +92,10 @@ public:
     void toggleCine();
     void stopCine(const QString& reason = QString());
     void cineTick();
-    int prefetchIndex() const { return m_prefetchIndex; }   // test probe: the smooth-scroll slot
+    // Test probe: the latest slice the prefetch pool targeted for this series, or -1 if it has not
+    // targeted one yet. It stays set after the frame lands (the frame sits in the cache now), so a
+    // test can wait on prefetch activity having happened, not only on one being in flight.
+    int prefetchIndex() const { return m_prefetchIndex; }
     bool mprAvailable() const { return m_mprAction && m_mprAction->isEnabled(); }
     // Documentation capture support: true once a slice is decoded and on the canvas, and a way to
     // ask for a chosen series so a capture shows anatomy rather than whichever row sorts first.
@@ -119,7 +125,7 @@ public:
         int presents = 0;
         int stalePresents = 0;      // decoded a slice the wheel had already moved past
         int prefetchStarts = 0;
-        int prefetchServed = 0;     // presented straight from the speculative slot
+        int prefetchServed = 0;     // presented from the decoded cache, not a fresh decode
         std::vector<double> latencyMs;   // request -> present, for the targets that were shown
     };
     const ScrollStats& scrollStatsForTest() const { return m_scrollStats; }
@@ -147,6 +153,14 @@ private:
         quint64 epoch = 0;
         bool ok = false;
     };
+    // A prefetch result carries its own index and epoch, unlike the old bare ImageFrame: a landing
+    // behind a series change must be attributable to the series it came from, not to whatever the
+    // prefetch pool happens to be decoding now, or a stale frame lands in the new series' cache.
+    struct PrefetchResult {
+        clivus::ImageFrame frame;
+        int index = -1;
+        quint64 epoch = 0;
+    };
 
     void showSeries(int index);
     void showSlice(int delta);
@@ -168,6 +182,16 @@ private:
     void sliceFinished();
     void presentSlice(int index, clivus::ImageFrame frame);
     void onPrefetchLanded();
+    // Scroll smoothness (radiology report: scrolling jerks and skips frames): the decoded-frame
+    // cache and the lookahead queue behind it. pumpSlice() serves the cache first, so a step into
+    // an already-decoded slice presents instantly instead of paying a full file re-read and
+    // decompress; refreshPrefetch() keeps the next few slices in the wheel's direction queued on
+    // the prefetch pool, in order, so sequential scrolling stays ahead of the decode.
+    void refreshPrefetch();
+    void startNextPrefetch();
+    void cacheInsert(int index, clivus::ImageFrame frame);
+    void cacheTrim();
+    void clearFrameCache();
     void cancelLoading();
     void startBenchmark();
     void setIdleProgress();
@@ -263,10 +287,24 @@ private:   // one source of truth: toolbar, menu, cursor, hint
     int m_failedSlice = -1;    // last slice a decode failed on: pumpSlice() refuses to auto-retry it
     bool m_lastStep = true;    // the wheel's travel direction (true = forward); drives the prefetch
     bool m_hasStep = false;    // before the first step, the lookahead stays quiet
-    QFutureWatcher<clivus::ImageFrame>* m_prefetchWatcher = nullptr;
-    clivus::ImageFrame m_prefetchFrame;   // the parked, still-unpresented neighbour frame
-    int m_prefetchIndex = -1;             // which slice the parked frame (or the in-flight one) is
+    QFutureWatcher<PrefetchResult>* m_prefetchWatcher = nullptr;
+    // Decoded-frame cache: slices already paid for stay around, so scrolling back — or stepping
+    // into a slice the lookahead already decoded — costs a copy, not a decode. Bounded by
+    // cacheTrim(); cleared whenever the series or folder changes, so no frame from one series can
+    // ever be presented as a slice of another.
+    std::map<int, clivus::ImageFrame> m_frameCache;
+    // Lookahead queue, nearest first, in the wheel's travel direction. Only the head is ever on the
+    // prefetch pool; the rest wait here, where a direction reversal can still drop them — unlike
+    // a task already handed to QtConcurrent, which cannot be cancelled.
+    std::deque<int> m_prefetchQueue;
+    int m_prefetchInFlight = -1;   // slice the prefetch pool is decoding now, or -1
+    int m_prefetchIndex = -1;      // latest slice the prefetch pool targeted for this series
     bool m_sliceInFlight = false;
+    // Annotations for the open series, loaded once per series instead of once per presented slice:
+    // loadAnnotationsForSlice() used to re-read and re-parse the sidecar JSON file on every scroll
+    // step, which is file I/O on the UI thread in the middle of the scroll path.
+    QString m_annoUid;
+    QVector<AnnotationStore::SliceRois> m_annoEntries;
     // Scroll scheduling measurement, and the monotonic clock the latency is measured against. Both are
     // read by the scroll test; nothing in the product depends on them.
     ScrollStats m_scrollStats;

@@ -206,6 +206,26 @@ int main(int argc, char** argv)
         CHECK(!s.latencyMs.empty());
     }
 
+    // E. Walk back over slices already shown: every step must come from the decoded-frame cache,
+    // not a second decode of the same file. This is the regression test for the radiology report
+    // that scrolling jerks and skips frames — before the cache, the walk back re-decoded every
+    // slice, and a fast spin dropped the intermediates outright.
+    {
+        w.resetScrollStatsForTest();
+        CHECK(w.currentSliceForTest() == 31);
+        for (int i = 0; i < 10; ++i) w.showSliceForTest(-1);
+        settle(w);
+        report("E cached walk back", w);
+        const auto& s = w.scrollStatsForTest();
+        CHECK(s.requests == 10);
+        CHECK(s.presents == 10);
+        CHECK(s.prefetchServed == 10);   // every present came from the cache, none re-decoded
+        CHECK(s.stalePresents == 0);
+        CHECK(w.presentedSlicesForTest().size() == 10);
+        CHECK(w.presentedSlicesForTest().back() == 21);   // 31 - 10 steps
+        CHECK(w.currentSliceForTest() == 21);
+    }
+
     std::printf("scroll: all scheduling checks passed\n");
     return 0;
 }

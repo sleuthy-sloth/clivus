@@ -222,6 +222,8 @@ private:
     int m_texHeight = 0;
     int m_texChannels = 1;
     bool m_texDirty = true;
+    int m_wheelRemainder = 0;   // sub-notch wheel delta carried over: high-resolution wheels and
+                                // trackpads send fractions of a 120-unit notch per event
     double m_center = 0.0;
     double m_width = 1.0;
     float m_zoom = 1.0f;
