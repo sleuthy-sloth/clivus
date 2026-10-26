@@ -99,9 +99,13 @@ Real, working, test-backed:
   under the cursor stays under it. Zoom and pan survive slice changes and reset only
   on a series switch.
 - **Scroll the stack by dragging it.** Middle-drag scrubs slices; the wheel, the slice
-  bar and the arrow keys do the same through one coalesced decode path. A frame that
-  finishes decoding after the wheel has moved on is dropped rather than flashed, so the
-  image on screen is always the slice you asked for.
+  bar and the arrow keys do the same through one coalesced decode path. Decoded frames
+  stay in a bounded cache (48 slices or 256 MB) with a four-slice look-ahead, so a step
+  into a decoded slice shows instantly and scrolling back never re-decodes a file; the
+  look-ahead keeps the next few slices decoded ahead of the wheel. Smooth wheels and
+  trackpads accumulate to whole notches instead of flicking one slice per event, and a
+  frame that finishes decoding after the wheel has moved on is dropped rather than
+  flashed, so the image on screen is always the slice you asked for.
 - **Read the pixel under the cursor.** Row/column, the stored value, the modality
   value, and a unit only when the object earns one: HU needs a rescale pair, RT Dose
   reads in Gy, and an object whose values came from a LUT reports no stored number
@@ -173,7 +177,7 @@ objects are smoke-tested for dimensions only, and their rows say so.
 
 ## Using it
 
-**No toolchain required:** grab **[v0.1.0](https://github.com/sleuthy-sloth/clivus/releases)** —
+**No toolchain required:** grab the **[newest release](https://github.com/sleuthy-sloth/clivus/releases)** —
 the release page carries a runnable `clivus` zip (exe + Qt/DCMTK DLLs + test
 corpus + licence pack), permanently; the CI artifact above is the same thing,
 rebuild daily at the current HEAD. Download, unzip, and on any Windows machine:
@@ -320,7 +324,8 @@ decodes in Gy; MPR opens as a separate three-plane window rather than in this la
 - **Shipped since the spike:** multi-frame browsing; colour photometrics
   (RGB/YBR_FULL, planar converted); MODALITY LUT handling — including the
   non-linear LUT-Sequence shape and PALETTE COLOR tables, both applied at decode
-  time with post-LUT window numbers; RT Dose dose units.
+  time with post-LUT window numbers; RT Dose dose units; smooth stack scrolling
+  (decoded-frame cache with a four-slice look-ahead, whole-notch wheel).
 - **Then:** window/level parity tests against a real Horos; a vendored DCMTK
   with JPEG 2000 on macOS (bots can't decode what their build lacks — today
   only Windows CI exercises J2K).
